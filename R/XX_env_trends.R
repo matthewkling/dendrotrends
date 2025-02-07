@@ -2,32 +2,30 @@
 # env_trends.R from dendrodemography
 env_trends <- function(trees, species){
 
-      select <- dplyr::select
-      # trees <- readRDS("data/fia_trees.rds")
-
-
+      # select <- dplyr::select
+      ## trees <- readRDS("data/fia_trees.rds")
 
       # forest density ################
 
       # identify macroplots
-      plot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_PLOT.csv",
-                    stringsAsFactors = F, colClasses = c(CN = "character")) %>%
-            select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD, MACRO_BREAKPOINT_DIA,
-                   STATECD, UNITCD, COUNTYCD, PLOT,
-                   LAT, LON, ELEV) %>% as_tibble()
-      subplot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_SUBPLOT.csv", stringsAsFactors = F,
-                       colClasses = c(CN = "character", PLT_CN = "character")) %>%
-            select(PLT_CN, SUBP, SUBP_CN = CN, PREV_SBP_CN, POINT_NONSAMPLE_REASN_CD,
-                   SLOPE, ASPECT) %>% as_tibble()
-      macro <- plot %>%
-            left_join(subplot) %>%
-            mutate(PLOT_ID = paste(STATECD, UNITCD, COUNTYCD, PLOT),
-                   SUBPLOT_ID = paste(PLOT_ID, SUBP)) %>%
-            select(plot_id = PLOT_ID,
-                   subplot_id = SUBPLOT_ID,
-                   macro_bpd = MACRO_BREAKPOINT_DIA) %>%
-            mutate(macroplot = is.finite(macro_bpd)) %>%
-            distinct()
+      # plot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_PLOT.csv",
+      #               stringsAsFactors = F, colClasses = c(CN = "character")) %>%
+      #       select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD, MACRO_BREAKPOINT_DIA,
+      #              STATECD, UNITCD, COUNTYCD, PLOT,
+      #              LAT, LON, ELEV) %>% as_tibble()
+      # subplot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_SUBPLOT.csv", stringsAsFactors = F,
+      #                  colClasses = c(CN = "character", PLT_CN = "character")) %>%
+      #       select(PLT_CN, SUBP, SUBP_CN = CN, PREV_SBP_CN, POINT_NONSAMPLE_REASN_CD,
+      #              SLOPE, ASPECT) %>% as_tibble()
+      # macro <- plot %>%
+      #       left_join(subplot) %>%
+      #       mutate(PLOT_ID = paste(STATECD, UNITCD, COUNTYCD, PLOT),
+      #              SUBPLOT_ID = paste(PLOT_ID, SUBP)) %>%
+      #       select(plot_id = PLOT_ID,
+      #              subplot_id = SUBPLOT_ID,
+      #              macro_bpd = MACRO_BREAKPOINT_DIA) %>%
+      #       mutate(macroplot = is.finite(macro_bpd)) %>%
+      #       distinct()
 
       # FIA subplot land area, in ha:
       area <- base::pi * (c(micro = 6.8, sub = 24, macro = 58.9) / 3.28084) ^ 2 / 10000
@@ -35,16 +33,13 @@ env_trends <- function(trees, species){
 
 
       # for each species, for each plot, we want trends for con_ba and tot_ba
-
       d <- trees %>%
-            left_join(macro) %>%
             mutate(species = paste(genus, species),
                    year = measyear,
                    adult = dia >= 5,
                    ba = pi * (dia / 2 * 2.54 / 100) ^ 2, # basal area, in m2
                    macro_bpd = ifelse(macroplot, macro_bpd, Inf)) %>%
             filter(is.finite(ba), ba > 0) %>%
-            # filter(plot_id == "27 2 135 20936", species == "Acer spicatum") %>% arrange(year) %>% view()
             group_by(lon, lat, plot_id, year) %>%
             mutate(ba_tot = sum(ba[adult & dia < macro_bpd], na.rm = T) / area["sub"] + # adult + juvenile ba / ha
                          sum(ba[adult & dia >= macro_bpd], na.rm = T) / area["macro"] +
@@ -61,20 +56,6 @@ env_trends <- function(trees, species){
             select(lon, lat, plot_id, species, year,
                    ba_tot, ba_con, ba_max) %>%
             distinct()
-
-      # p <- d %>%
-      #       filter(species %in% sample(species, 100)) %>%
-      #       select(species, plot_id, year, ba_tot) %>%
-      #       distinct() %>%
-      #       arrange(species, plot_id, year) %>%
-      #       group_by(species, plot_id) %>%
-      #       mutate(dd = lead(ba_tot) / ba_tot) %>%
-      #       ggplot(aes(ba_tot, dd, group = species)) +
-      #       geom_smooth(se = F, linewidth = .3) +
-      #       scale_y_log10() +
-      #       coord_cartesian(xlim = c(0, 100))
-      # ggsave("figures/density/density_delta_curves.png", p, width = 6, height = 6, units = "in")
-
 
       project <- function(x, y, p){
             mx <- mean(x)
@@ -218,119 +199,119 @@ env_trends <- function(trees, species){
 
       # library(terra)
 
-      ll <- d %>%
-            ungroup() %>%
-            dplyr::select(plot_id, lon, lat) %>%
-            distinct()
-
-
-      # trends based on recent annual climate
-      pr_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_pr_") %>%
-            rast() %>%
-            setNames(paste0("y", 1:nlyr(.))) %>%
-            extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
-            "/"(100) %>% log() %>%
-            apply(1, function(x) c(project(2000:2018, x, 2000),
-                                   project(2000:2018, x, 2020))) %>%
-            t() %>%
-            as.data.frame() %>%
-            setNames(c("bio12_2000", "bio12_2020")) %>%
-            as_tibble() %>%
-            mutate(plot_id = ll$plot_id) %>%
-            distinct()
-      tas_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_tas_") %>%
-            rast() %>%
-            setNames(paste0("y", 1:nlyr(.))) %>%
-            extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
-            "*"(0.1) %>% "+"(-273.15) %>%
-            apply(1, function(x) c(project(2000:2018, x, 2000),
-                                   project(2000:2018, x, 2020))) %>%
-            t() %>%
-            as.data.frame() %>%
-            setNames(c("bio1_2000", "bio1_2020")) %>%
-            as_tibble() %>%
-            mutate(plot_id = ll$plot_id) %>%
-            distinct()
-
-
-      # # trends based on recent and future climatologies
-      # clim <- c(list.files("/Volumes/T7/CHELSA/v2/raw", full.names = T, pattern = "bio1_|bio12_"),
-      #           c("/Volumes/T7/CHELSA/v2/cmip/CHELSA_bio1_2071-2100_gfdl-esm4_ssp585_V.2.1.tif",
-      #             "/Volumes/T7/CHELSA/v2/cmip/CHELSA_bio12_2071-2100_gfdl-esm4_ssp585_V.2.1.tif")) %>%
+      # ll <- d %>%
+      #       ungroup() %>%
+      #       dplyr::select(plot_id, lon, lat) %>%
+      #       distinct()
+      #
+      #
+      # # trends based on recent annual climate
+      # pr_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_pr_") %>%
       #       rast() %>%
-      #       setNames(c("bio1_2010", "bio12_2010", "bio1_2080", "bio12_2080")) %>%
+      #       setNames(paste0("y", 1:nlyr(.))) %>%
       #       extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
+      #       "/"(100) %>% log() %>%
+      #       apply(1, function(x) c(project(2000:2018, x, 2000),
+      #                              project(2000:2018, x, 2020))) %>%
+      #       t() %>%
       #       as.data.frame() %>%
+      #       setNames(c("bio12_2000", "bio12_2020")) %>%
       #       as_tibble() %>%
       #       mutate(plot_id = ll$plot_id) %>%
-      #       distinct() %>%
-      #       mutate(bio12_2010 = log(bio12_2010),
-      #              bio12_2080 = log(bio12_2080))
+      #       distinct()
+      # tas_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_tas_") %>%
+      #       rast() %>%
+      #       setNames(paste0("y", 1:nlyr(.))) %>%
+      #       extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
+      #       "*"(0.1) %>% "+"(-273.15) %>%
+      #       apply(1, function(x) c(project(2000:2018, x, 2000),
+      #                              project(2000:2018, x, 2020))) %>%
+      #       t() %>%
+      #       as.data.frame() %>%
+      #       setNames(c("bio1_2000", "bio1_2020")) %>%
+      #       as_tibble() %>%
+      #       mutate(plot_id = ll$plot_id) %>%
+      #       distinct()
       #
-      # clim <- clim %>%
-      #       left_join(pr_ann) %>%
-      #       left_join(tas_ann)
-      clim <- left_join(pr_ann, tas_ann)
+      #
+      # # # trends based on recent and future climatologies
+      # # clim <- c(list.files("/Volumes/T7/CHELSA/v2/raw", full.names = T, pattern = "bio1_|bio12_"),
+      # #           c("/Volumes/T7/CHELSA/v2/cmip/CHELSA_bio1_2071-2100_gfdl-esm4_ssp585_V.2.1.tif",
+      # #             "/Volumes/T7/CHELSA/v2/cmip/CHELSA_bio12_2071-2100_gfdl-esm4_ssp585_V.2.1.tif")) %>%
+      # #       rast() %>%
+      # #       setNames(c("bio1_2010", "bio12_2010", "bio1_2080", "bio12_2080")) %>%
+      # #       extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
+      # #       as.data.frame() %>%
+      # #       as_tibble() %>%
+      # #       mutate(plot_id = ll$plot_id) %>%
+      # #       distinct() %>%
+      # #       mutate(bio12_2010 = log(bio12_2010),
+      # #              bio12_2080 = log(bio12_2080))
+      # #
+      # # clim <- clim %>%
+      # #       left_join(pr_ann) %>%
+      # #       left_join(tas_ann)
+      # clim <- left_join(pr_ann, tas_ann)
 
 
 
       # pollution ##############
 
-      # library(raster)
-      slope <- function(x, ...){
-            d <- x - mean(x)
-            w <- ((1:length(x) - 1) - (length(x)-1)/2)
-            weighted.mean(d/w, abs(w))
-      }
+      # # library(raster)
+      # slope <- function(x, ...){
+      #       d <- x - mean(x)
+      #       w <- ((1:length(x) - 1) - (length(x)-1)/2)
+      #       weighted.mean(d/w, abs(w))
+      # }
+      #
+      # # CMAQ deposition data, 2002-2019
+      # f <- list.files("~/data/CMAQ/annual_total_adjusted_wet_deposition/",
+      #                 full.names = T, pattern = "\\.tif", recursive = T)
+      #
+      # poll <- c(f[grepl("ADJ_TOTDEP_N_CONUS", f)] %>% rast() %>% log() %>% mean(),
+      #           f[grepl("ADJ_TOTDEP_S_CONUS", f)] %>% rast() %>% log() %>% mean()) %>%
+      #       setNames(c("nitrogen", "sulfur"))
+      #
+      # trend <- c(f[grepl("ADJ_TOTDEP_N_CONUS", f)] %>% rast() %>% log() %>% app(slope),
+      #            f[grepl("ADJ_TOTDEP_S_CONUS", f)] %>% rast() %>% log() %>% app(slope)) %>%
+      #       setNames(c("nitrogen", "sulfur"))
+      #
+      # py <- mean(2002:2019)
+      # p2000 <- poll + trend * (2000 - py)
+      # # p2010 <- poll + trend * (2010 - py)
+      # p2020 <- poll + trend * (2020 - py)
+      # # p2080 <- poll + trend * (2080 - py)
+      #
+      # pts <- dplyr::select(ll, lon, lat)
+      # coordinates(pts) <- c("lon", "lat")
+      # crs(pts) <- "+proj=longlat"
+      # pts <- spTransform(pts, crs(poll))
+      #
+      # poll <- c(p2000, #p2010,
+      #           p2020#, p2080
+      #           ) %>%
+      #       setNames(c("nitrogen_2000", "sulfur_2000",
+      #                  # "nitrogen_2010", "sulfur_2010",
+      #                  "nitrogen_2020", "sulfur_2020"#,
+      #                  # "nitrogen_2080", "sulfur_2080"
+      #                  )
+      #                ) %>%
+      #       exp() %>%
+      #       sqrt() %>% # sqrt pollution is what went into the models
+      #       terra::extract(coordinates(pts)) %>%
+      #       as.data.frame() %>%
+      #       as_tibble() %>%
+      #       mutate(plot_id = ll$plot_id) %>%
+      #       distinct()
 
-      # CMAQ deposition data, 2002-2019
-      f <- list.files("~/data/CMAQ/annual_total_adjusted_wet_deposition/",
-                      full.names = T, pattern = "\\.tif", recursive = T)
-
-      poll <- c(f[grepl("ADJ_TOTDEP_N_CONUS", f)] %>% rast() %>% log() %>% mean(),
-                f[grepl("ADJ_TOTDEP_S_CONUS", f)] %>% rast() %>% log() %>% mean()) %>%
-            setNames(c("nitrogen", "sulfur"))
-
-      trend <- c(f[grepl("ADJ_TOTDEP_N_CONUS", f)] %>% rast() %>% log() %>% app(slope),
-                 f[grepl("ADJ_TOTDEP_S_CONUS", f)] %>% rast() %>% log() %>% app(slope)) %>%
-            setNames(c("nitrogen", "sulfur"))
-
-      py <- mean(2002:2019)
-      p2000 <- poll + trend * (2000 - py)
-      # p2010 <- poll + trend * (2010 - py)
-      p2020 <- poll + trend * (2020 - py)
-      # p2080 <- poll + trend * (2080 - py)
-
-      pts <- dplyr::select(ll, lon, lat)
-      coordinates(pts) <- c("lon", "lat")
-      crs(pts) <- "+proj=longlat"
-      pts <- spTransform(pts, crs(poll))
-
-      poll <- c(p2000, #p2010,
-                p2020#, p2080
-                ) %>%
-            setNames(c("nitrogen_2000", "sulfur_2000",
-                       # "nitrogen_2010", "sulfur_2010",
-                       "nitrogen_2020", "sulfur_2020"#,
-                       # "nitrogen_2080", "sulfur_2080"
-                       )
-                     ) %>%
-            exp() %>%
-            sqrt() %>% # sqrt pollution is what went into the models
-            terra::extract(coordinates(pts)) %>%
-            as.data.frame() %>%
-            as_tibble() %>%
-            mutate(plot_id = ll$plot_id) %>%
-            distinct()
-
-      pd <- left_join(poll, ll) %>%
-            # gather(var, value, nitrogen_2000:sulfur_2080) %>%
-            gather(var, value, nitrogen_2000:sulfur_2020) %>%
-            mutate(value = value^2) %>% # back to native units
-            separate(var, c("var", "year")) %>%
-            mutate(year = paste0("y", year)) %>%
-            spread(year, value) %>%
-            filter(lat < 51)
+      # pd <- left_join(poll, ll) %>%
+      #       # gather(var, value, nitrogen_2000:sulfur_2080) %>%
+      #       gather(var, value, nitrogen_2000:sulfur_2020) %>%
+      #       mutate(value = value^2) %>% # back to native units
+      #       separate(var, c("var", "year")) %>%
+      #       mutate(year = paste0("y", year)) %>%
+      #       spread(year, value) %>%
+      #       filter(lat < 51)
 
       # p <- pd %>%
       #       ggplot(aes(lon, lat, color = y2010)) +

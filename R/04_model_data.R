@@ -1,21 +1,12 @@
 
+
 prep_recruitment_data <- function(trees, fia_env, species){
+
+      # note: recruitment is plot-level, rather than subplot- or tree-level
+
       select <- dplyr::select
       spp <- species$spp
       scl <- species$scl
-
-
-      # ja <- trees %>%
-      #       mutate(species = paste(genus, species),
-      #              yr = measyear) %>%
-      #       filter(species %in% spp,
-      #              !is.na(species),
-      #              is.finite(lon),
-      #              is.finite(dia)) %>%
-      #       group_by(species, plot_id, lon, lat) %>%
-      #       filter(yr == max(yr)) %>%
-      #       summarize(adults = sum(dia >= 5),
-      #                 juveniles = sum(dia < 5))
 
       r <- trees %>%
             mutate(yr = measyear) %>%
@@ -109,6 +100,7 @@ prep_recruitment_data <- function(trees, fia_env, species){
             na.omit() %>%
             mutate(plot_id = str_sub(plot_id, 1, -3))
 
+      # average environmental vars across subplots and trees
       d <- d %>%
             group_by(plot_id, species) %>%
             filter(!is.na(year_next),
@@ -136,42 +128,80 @@ prep_recruitment_data <- function(trees, fia_env, species){
                    nitrogen = (nitrogen - nitrogen_mean) / nitrogen_sd,
                    sulfur = (sulfur - sulfur_mean) / sulfur_sd,
                    bio1 = (bio1 - bio1_mean) / bio1_sd,
-                   bio12 = (bio12 - bio12_mean) / bio12_sd)
-      d
+                   bio12 = (bio12 - bio12_mean) / bio12_sd) %>%
+            filter(is.finite(rec_ba)) %>% na.omit()
+
+      d %>% mutate(outcome = rec_ba) %>% filter(species %in% spp)
 }
 
+prep_growth_data <- function(d, species){
 
-fit_recruitment_model <- function(d, species, model_file){
+      spp <- species$spp
+      scl <- species$scl
 
+      # d <- read_csv("data/formatted_fia_data.csv")
+      d <- d %>%
+            mutate(bio12 = log(bio12)) %>%
+            filter(!str_detect(species, "spp")) %>%
+            na.omit()
+
+      dd <- d %>%
+            mutate(t = year_next - year,
+                   agr = (dia_next / dia) ^ (1/(t)) - 1,
+                   agr2 = (dia_next^2 / dia^2) ^ (1/(t)) - 1,
+                   dia_next_2 = dia * (1 + agr) ^ t,
+                   dens = ba_j_tot + ba_a_tot) %>%
+            filter(species %in% spp,
+                   class_next != "d") %>%
+            group_by(species) %>%
+            mutate(dia = log((dia + dia_next) / 2), # average diameter over survey interval
+                   ba_con = ba_j_con + ba_a_con,
+                   ba_het = ba_j_het + ba_a_het) %>%
+            # mutate(bacon = log(ba_con),
+            #        bacon = ifelse(!is.finite(bacon), NA, bacon),
+            #        bahet = log(ba_het + 1)) %>%
+            mutate(bacon = sqrt(ba_con),
+                   bahet = sqrt(ba_het)) %>%
+            left_join(scl) %>%
+            mutate(dia = (dia - dia_mean) / dia_sd,
+                   bacon = (bacon - bacon_mean) / bacon_sd,
+                   bahet = (bahet - bahet_mean) / bahet_sd,
+                   nitrogen = (nitrogen - nitrogen_mean) / nitrogen_sd,
+                   sulfur = (sulfur - sulfur_mean) / sulfur_sd,
+                   bio1 = (bio1 - bio1_mean) / bio1_sd,
+                   bio12 = (bio12 - bio12_mean) / bio12_sd) %>%
+            sample_n(min(1e5, length(species))) %>%
+            ungroup() %>%
+            mutate(spid = as.integer(factor(species)),
+                   agr = ifelse(agr < 0, 0, agr)) # clamp dependent var to nonnegative
+
+      dd %>% mutate(outcome = sqrt(agr)) %>% filter(species %in% spp)
+}
+
+prep_mortality_data <- function(d, species){
       select <- dplyr::select
       spp <- species$spp
+      scl <- species$scl
 
-      model <- cmdstan_model(model_file)
+      # d <- read_csv("data/formatted_fia_data.csv")
+      d <- d %>%
+            mutate(bio12 = log(bio12)) %>%
+            na.omit() %>%
+            filter(species %in% spp) %>%
+            filter(class != "d")
 
-      fit_model <- function(sp){
+      dd <- d %>%
+            mutate(mortality = as.integer(class_next == "d"),
+                   dia = log((dia + dia_next) / 2),
+                   t = year_next - year) %>%
+            left_join(scl) %>%
+            mutate(dia = (dia - dia_mean) / dia_sd,
+                   bacon = (sqrt(ba_j_con + ba_a_con) - bacon_mean) / bacon_sd,
+                   bahet = (sqrt(ba_j_het + ba_a_het) - bahet_mean) / bahet_sd,
+                   nitrogen = (nitrogen - nitrogen_mean) / nitrogen_sd,
+                   sulfur = (sulfur - sulfur_mean) / sulfur_sd,
+                   bio1 = (bio1 - bio1_mean) / bio1_sd,
+                   bio12 = (bio12 - bio12_mean) / bio12_sd)
 
-            dd <- d %>% filter(species == sp, is.finite(rec_ba)) %>% na.omit()
-
-            x <- bind_cols(bacon = dd$bacon,
-                           bahet = dd$bahet,
-                           sulfur = dd$sulfur,
-                           nitrogen = dd$nitrogen,
-                           bio1 = dd$bio1,
-                           bio12 = dd$bio12)
-
-            data <- list(N = nrow(dd),
-                         y = dd$rec_ba,
-                         P = ncol(x),
-                         x = x,
-                         t = dd$t)
-
-            fit <- model$sample(data = data,
-                                iter_warmup = 500, iter_sampling = 500,
-                                chains = 4, parallel_chains = 4)
-
-            fit$draws(format = "draws_df") %>% as.data.frame() %>% as_tibble() %>%
-                  mutate(sp = sp)
-      }
-
-      spp %>% map_dfr(fit_model)
+      dd %>% mutate(outcome = mortality) %>% filter(species %in% spp)
 }

@@ -1,31 +1,35 @@
 
-predict_growth <- function(posterior, model_data, trend_env, ndraws){
 
-      library(wCorr)
+predict_growth <- function(grow_draws, grow_data, trends, ndraws){
+      # tar_load(grow_data)
+      # tar_load(grow_draws)
+      # trend_data <- tar_read(fia_env)$trend
+      # ndraws = 5
+
       select <- dplyr::select
 
       # fitted parameter values
       # fi <- load_fits("data/draws_mortality.csv", ndraws)
-      fi <- load_fits(posterior, ndraws)
+      fi <- load_fits(grow_draws, ndraws)
 
       # observed data
       # od <- load_obs("data/model_data_mortality.csv", "mortality")
-      od <- load_obs(model_data, "agr")
+      od <- load_obs(grow_data)
 
 
       ### baseline ================================================
 
       # combine with fitted parameters and calculate predicted mortality
-      trans <- sqrt
-      inv_trans <- function(x)x^2
-      fdp <- baseline_pred(fi, od) %>%
-            mutate(obs = trans(obs))
+      # trans <- sqrt
+      # inv_trans <- function(x)x^2
+      fdp <- baseline_pred(fi, od)# %>%
+            # mutate(obs = trans(obs))
 
 
       ### trends ================================
 
       # join env trends to obs trees
-      ode <- expand_env_obs(od, trend_env)
+      ode <- expand_env_obs(od, trends)
 
       # combine with fitted parameters and calculate predicted growth
       fe <- fi %>%
@@ -41,7 +45,8 @@ predict_growth <- function(posterior, model_data, trend_env, ndraws){
             group_by(species, plot_id) %>%
             reframe(nreps = length(unique(year)),
                     tree_yrs = sum(t),
-                    obs = project(year, trans(obs), c(2000, 2020)),
+                    # obs = project(year, trans(obs), c(2000, 2020)),
+                    obs = project(year, obs, c(2000, 2020)),
                     year = c(2000, 2020))
 
       fm <- left_join(fe, mt) %>%
@@ -60,7 +65,8 @@ predict_growth <- function(posterior, model_data, trend_env, ndraws){
 
       # geographic bins
       fm <- fm %>%
-            left_join(trend_env %>% select(plot_id, lon, lat) %>% distinct()) %>%
+            # left_join(trend_env %>% select(plot_id, lon, lat) %>% distinct()) %>%
+            left_join(grow_data %>% select(plot_id, lon, lat) %>% distinct()) %>%
             mutate(bin = paste(plyr::round_any(lon, 3), plyr::round_any(lat, 3)))
 
 
@@ -69,18 +75,17 @@ predict_growth <- function(posterior, model_data, trend_env, ndraws){
 
 }
 
-predict_mortality <- function(posterior, model_data, trend_env, ndraws){
+predict_mortality <- function(mort_draws, mort_data, trends, ndraws){
 
-      library(wCorr)
       select <- dplyr::select
 
       # fitted parameter values
       # fi <- load_fits("data/draws_mortality.csv", ndraws)
-      fi <- load_fits(posterior, ndraws)
+      fi <- load_fits(mort_draws, ndraws)
 
       # observed data
       # od <- load_obs("data/model_data_mortality.csv", "mortality")
-      od <- load_obs(model_data, "mortality")
+      od <- load_obs(mort_data)
 
 
       ### baseline ================================================
@@ -93,7 +98,7 @@ predict_mortality <- function(posterior, model_data, trend_env, ndraws){
       ### trends ================================
 
       # join env trends to obs trees
-      ode <- expand_env_obs(od, trend_env)
+      ode <- expand_env_obs(od, trends)
 
       # combine with fitted parameters and calculate predicted mortality
       fe <- fi %>%
@@ -130,7 +135,8 @@ predict_mortality <- function(posterior, model_data, trend_env, ndraws){
 
       # geographic bins
       fm <- fm %>%
-            left_join(trend_env %>% select(plot_id, lon, lat) %>% distinct()) %>%
+            # left_join(trend_env %>% select(plot_id, lon, lat) %>% distinct()) %>%
+            left_join(mort_data %>% select(plot_id, lon, lat) %>% distinct()) %>%
             mutate(bin = paste(plyr::round_any(lon, 3), plyr::round_any(lat, 3)))
       # write_csv(fm, "data/eval_mortality.csv")
 
@@ -139,60 +145,50 @@ predict_mortality <- function(posterior, model_data, trend_env, ndraws){
 
 }
 
-predict_recruitment <- function(posterior, model_data, trend_env, ndraws){
+predict_recruitment <- function(recr_draws, recr_data, trends, ndraws){
 
-      library(wCorr)
       select <- dplyr::select
 
       # fitted parameter values
-      load_fits_rec <- function(x, i){
-            x %>%
-                  # read_csv() %>%
-                  select(-lp__) %>%
-                  gather(param, value, `zeta[1]`:`mu[7]`) %>%
-                  mutate(param = str_remove(param, "\\]"),
-                         param = str_replace(param, "\\[", "_")) %>%
-                  separate(param, c("param", "var")) %>%
-                  mutate(var = recode(var, "1" = "intercept",
-                                      "2" = "bacon", "3" = "bahet",
-                                      "4" = "sulfur", "5" = "nitrogen",
-                                      "6" = "temperature", "7" = "precipitation")) %>%
-                  filter(.draw %in% sample(unique(.draw), i)) %>%
-                  select(i = .draw, species = sp, var, param, param_value = value)
-      }
+      # load_fits_rec <- function(x, i){
+      #       x %>%
+      #             # read_csv() %>%
+      #             dplyr::select(-lp__) %>%
+      #             gather(param, value, `zeta[1]`:`mu[7]`) %>%
+      #             mutate(param = str_remove(param, "\\]"),
+      #                    param = str_replace(param, "\\[", "_")) %>%
+      #             separate(param, c("param", "var")) %>%
+      #             mutate(var = recode(var, "1" = "intercept",
+      #                                 "2" = "bacon", "3" = "bahet",
+      #                                 "4" = "sulfur", "5" = "nitrogen",
+      #                                 "6" = "temperature", "7" = "precipitation")) %>%
+      #             filter(.draw %in% sample(unique(.draw), i)) %>%
+      #             dplyr::select(i = .draw, species = sp, var, param, param_value = value)
+      # }
       # fi <- load_fits_rec("data/draws_recruitment.csv", ndraws)
-      fi <- load_fits_rec(posterior, ndraws)
+      fi <- load_fits(recr_draws, ndraws)
 
       # observed data
-      load_obs_rec <- function(x, v){
-            x <- x %>%
-                  # read_csv() %>%
-                  mutate(intercept = 1,
-                         year = (yr0 + yr1) / 2)
-            x$obs <- x[[v]]
+      load_obs_rec <- function(x){
             x %>%
-                  select(species, plot_id, #tree_id,
-                         year, obs, t,
-                         intercept, # dbh = dia,
-                         bacon, bahet, sulfur, nitrogen, temperature = bio1, precipitation = bio12) %>%
+                  mutate(intercept = 1,
+                         year = (yr0 + yr1) / 2) %>%
+                  rename(obs = outcome) %>%
+            # x$obs <- x[[v]]
+            # x %>%
+                  dplyr::select(species, plot_id, #tree_id,
+                                year, obs, t,
+                                intercept, # dbh = dia,
+                                bacon, bahet, sulfur, nitrogen, temperature = bio1, precipitation = bio12) %>%
                   gather(var, value, intercept:precipitation)
       }
-      # od <- load_obs_rec("data/model_data_recruitment.csv", "rec_ba") %>%
-      #       filter(is.finite(obs))
-      od <- load_obs_rec(model_data, "rec_ba") %>%
+      od <- load_obs_rec(recr_data) %>%
             filter(is.finite(obs))
 
 
       ### baseline ================================================
 
-      # combine with fitted parameters and calculate predicted mortality
-      baseline_pred_rec <- function(fi, od){
-            left_join(fi, od) %>%
-                  group_by(i, species, plot_id, year, t, param) %>%
-                  summarize(obs = mean(obs),
-                            pred = sum(param_value * value),
-                            .groups = "drop")
-      }
+      # combine with fitted parameters and calculate predicted
       fdp0 <- baseline_pred_rec(fi, od) %>%
             gather(stat, value, obs, pred) %>%
             unite(stat, param, stat) %>%
@@ -217,33 +213,43 @@ predict_recruitment <- function(posterior, model_data, trend_env, ndraws){
 
       ### trends ================================
 
-      # expand env trends to obs trees
-      expand_env_obs_rec <- function(od, e){
-            # join env trends to obs trees
-            ode <- od %>%
-                  select(species, plot_id) %>%
-                  distinct() %>%
-                  left_join(e) %>%
-                  na.omit()
+      # # expand env trends to obs trees
+      # expand_env_obs_rec <- function(od, e){
+      #
+      #       # # join env trends to obs trees
+      #       ode <- od %>%
+      #             select(species, plot_id) %>%
+      #             distinct() %>%
+      #             left_join(e) %>%
+      #             na.omit()
+      #
+      #       # add intercept
+      #       ode <- od %>%
+      #             filter(var %in% c("dbh", "intercept")) %>%
+      #             group_by(species, plot_id, var) %>%
+      #             reframe(value1 = mean(value), # could project here instead of averaging
+      #                     t = sum(t),
+      #                     value = project(year, value, c(2000, 2020)),
+      #                     year = c(2000, 2020)) %>%
+      #             mutate(value = ifelse(is.finite(value), value, value1)) %>%
+      #             dplyr::select(-value1) %>%
+      #             bind_rows(ode)
+      #
+      #       ode %>% group_by(species, plot_id, year) %>% filter(length(var) == 7) %>%
+      #             group_by(species, plot_id) %>%
+      #             mutate(t = unique(na.omit(t))) %>% # make sure t is present for all params
+      #             ungroup()
+      # }
 
-            # add intercept
-            ode <- od %>%
-                  filter(var %in% c("dbh", "intercept")) %>%
-                  group_by(species, plot_id, var) %>%
-                  reframe(value1 = mean(value), # could project here instead of averaging
-                          t = sum(t),
-                          value = project(year, value, c(2000, 2020)),
-                          year = c(2000, 2020)) %>%
-                  mutate(value = ifelse(is.finite(value), value, value1)) %>%
-                  select(-value1) %>%
-                  bind_rows(ode)
+      ptrends <- trends %>%
+            mutate(plot_id = str_sub(plot_id, 1, -3)) %>%
+            group_by(plot_id, lon, lat, species, year, var) %>%
+            summarize(value = mean(value), .groups = "drop")
 
-            ode %>% group_by(species, plot_id, year) %>% filter(length(var) == 7) %>%
-                  group_by(species, plot_id) %>%
-                  mutate(t = unique(na.omit(t))) %>% # make sure t is present for all params
-                  ungroup()
-      }
-      ode <- expand_env_obs_rec(od, trend_env)
+      ode <- expand_env_obs(od, ptrends) %>%
+            group_by(species, plot_id) %>%
+            mutate(t = unique(na.omit(t))) %>% # make sure t is present for all params
+            ungroup()
 
 
       # combine with fitted parameters and calculate predicted rate
@@ -256,13 +262,6 @@ predict_recruitment <- function(posterior, model_data, trend_env, ndraws){
                       .groups = "drop")
 
       # observed trends for 2000 to 2020
-      project <- function(x, y, p){
-            # if(length(x)>1) browser()
-            mx <- mean(x)
-            x <- x - mx
-            beta <- sum(1/sum(x^2) * x * y) # formula for regression coef if mean(x) == 0
-            mean(y) + beta * (p - mx)
-      }
       mt <- od %>%
             select(species, plot_id, t, year, obs) %>%
             distinct() %>%
@@ -297,7 +296,8 @@ predict_recruitment <- function(posterior, model_data, trend_env, ndraws){
 
       # geographic bins
       fm <- fm %>%
-            left_join(trend_env %>% select(plot_id, lon, lat) %>% distinct()) %>%
+            # left_join(trend_env %>% select(plot_id, lon, lat) %>% distinct()) %>%
+            left_join(ptrends %>% select(plot_id, lon, lat) %>% distinct()) %>%
             mutate(bin = paste(plyr::round_any(lon, 3), plyr::round_any(lat, 3)))
 
       fm <- fm %>%
@@ -310,52 +310,33 @@ predict_recruitment <- function(posterior, model_data, trend_env, ndraws){
 
 
 
-logit <- function(x) log(x / (1-x))
-inv_logit <- function(x) 1 / (1 + exp(-x))
-decile <- function(x) floor(rank(x) / (length(x) + 1) * 10)
-beta <- function(x, y){
-      x <- x - mean(x)
-      beta <- sum(1/sum(x^2) * x * y)
-}
-project <- function(x, y, p){
-      mx <- mean(x)
-      x <- x - mx
-      beta <- sum(1/sum(x^2) * x * y) # formula for regression coef if mean(x) == 0
-      mean(y) + beta * (p - mx)
-}
-prj_logit <- function(x, y, x2, offset= 1/10000){
-      # as.vector(predict(glm(y ~ x, family = binomial("logit")), data.frame(x = x2), type = "response"))
-      if(length(unique(x)) == 1) return(rep(mean(y), length(x2)))
-      y <- y * (1 - offset) + offset/2
-      inv_logit(project(x, logit(y), x2))
-}
 
 # fitted parameter values
 load_fits <- function(x, i){
+
       x %>%
-            # read_csv() %>%
             dplyr::select(-lp__) %>%
-            gather(param, value, `beta[1]`:`beta[8]`) %>%
+            gather(param, value, contains("[")) %>%
             mutate(param = str_remove(param, "\\]"),
                    param = str_replace(param, "\\[", "_")) %>%
             separate(param, c("param", "var")) %>%
-            mutate(var = recode(var, "1" = "intercept", "2" = "dbh",
-                                "3" = "bacon", "4" = "bahet",
-                                "5" = "sulfur", "6" = "nitrogen",
-                                "7" = "temperature", "8" = "precipitation")) %>%
+            mutate(var = recode(var, "1" = "intercept",
+                                "2" = "bacon", "3" = "bahet",
+                                "4" = "sulfur", "5" = "nitrogen",
+                                "6" = "temperature", "7" = "precipitation",
+                                "8" = "dbh")) %>%
             filter(.draw %in% sample(unique(.draw), i)) %>%
             dplyr::select(i = .draw, species = sp, var, param, param_value = value)
 }
 
 # observed data
-load_obs <- function(x, v){
-      x <- x %>%
-            # read_csv() %>%
-            mutate(intercept = 1,
-                   year = (year + year_next) / 2,
-                   plot_id = str_sub(plot_id, 1, -3))
-      x$obs <- x[[v]]
+load_obs <- function(x){
       x %>%
+            mutate(intercept = 1,
+                   year = (year + year_next) / 2#,
+                   # plot_id = str_sub(plot_id, 1, -3)
+            ) %>%
+            rename(obs = outcome) %>%
             dplyr::select(species, plot_id, tree_id, year, obs, t,
                           intercept, dbh = dia, bacon, bahet, sulfur, nitrogen, temperature = bio1, precipitation = bio12) %>%
             gather(var, value, intercept:precipitation)
@@ -369,7 +350,21 @@ baseline_pred <- function(fi, od){
                       .groups = "drop")
 }
 
+baseline_pred_rec <- function(fi, od){
+      left_join(fi, od) %>%
+            group_by(i, species, plot_id, year, t, param) %>%
+            summarize(obs = mean(obs),
+                      pred = sum(param_value * value),
+                      .groups = "drop")
+}
+
 expand_env_obs <- function(od, e){
+
+      # special treatment for recruitment
+      rec <- ! "tree_id" %in% names(od)
+      if(rec) od$tree_id <- 1
+      nterms <- ifelse(rec, 7, 8)
+
       # join env trends to obs trees
       ode <- od %>%
             dplyr::select(species, plot_id, tree_id) %>%
@@ -377,7 +372,7 @@ expand_env_obs <- function(od, e){
             left_join(e) %>%
             na.omit()
 
-      # add diameter and intercept
+      # add trends in diameter and intercept
       ode <- od %>%
             filter(var %in% c("dbh", "intercept")) %>%
             group_by(species, plot_id, tree_id, var) %>%
@@ -388,9 +383,13 @@ expand_env_obs <- function(od, e){
             mutate(value = ifelse(is.finite(value), value, value1)) %>%
             dplyr::select(-value1) %>%
             bind_rows(ode)
+      # ode
 
-      ode
+      ode %>%
+            group_by(species, plot_id, tree_id, year) %>%
+            mutate(nrows = n()) %>% ungroup() %>% #count(nrows)
+            filter(nrows == nterms) %>%
+            dplyr::select(-nrows)
 }
 
-ann2multi <- function(x, t) 1 - (1 - x) ^ t
-multi2ann <- function(x, t) 1 - ((1 - x) ^ (1/t))
+

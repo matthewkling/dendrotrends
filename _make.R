@@ -1,6 +1,6 @@
 
 source("_targets.R")
-tar_make()
+tar_make(as_job = TRUE)
 
 
 tar_prune()

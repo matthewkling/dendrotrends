@@ -13,7 +13,7 @@ assemble_fia <- function(dir = "~/data/FIA/2024_03"){
       # unique key: STATECD, INVYR, UNITCD, COUNTYCD, PLOT
       plot <- fread(paste0(dir, "/CSV_FIADB_ENTIRE/ENTIRE_PLOT.csv"), stringsAsFactors = F,
                     colClasses = c(CN = "character")) %>%
-            select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD,
+            select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD, MACRO_BREAKPOINT_DIA,
                    # KINDCD, QA_STATUS, ##### these two are added ######
                    STATECD, INVYR, MEASYEAR, UNITCD, COUNTYCD, PLOT,
                    LAT, LON, ELEV) %>% as_tibble()
@@ -72,35 +72,21 @@ assemble_fia <- function(dir = "~/data/FIA/2024_03"){
             mutate(PLOT_ID = paste(STATECD, UNITCD, COUNTYCD, PLOT),
                    SUBPLOT_ID = paste(PLOT_ID, SUBP)) %>%
 
-            #### this chunk differs slightly from transitions ######
-      # filter(is.na(planted),
-      #        !is.na(SUBP_STATUS_CD), SUBP_STATUS_CD %in% c(1, 2),
-      #        DESIGNCD %in% c(1, 501:506), # 4-subplot design
-      #        KINDCD %in% 1:2) %>%
-      #       group_by(PLOT_ID) %>%
-      #       filter(max(SUBP) < 5) %>% ungroup() %>%
-      filter(is.na(planted),
-             DESIGNCD %in% c(1, 111:118, 230:242, 311:323, 328, 501:506), # 4-subplot design
-             SUBP <= 4) %>%
-
-
+            filter(is.na(planted),
+                   DESIGNCD %in% c(1, 111:118, 230:242, 311:323, 328, 501:506), # 4-subplot design
+                   SUBP <= 4) %>%
 
             clean_names() %>%
             mutate(lon = ifelse(lon>0, lon-360, lon)) %>%
             filter(lat > 24) %>%
 
-
             mutate(tree_id = paste(subplot_id, designcd, tree)) %>%
             filter(manual >= 2.0,
-                   is.finite(lon), is.finite(lat))
+                   is.finite(lon), is.finite(lat)) %>%
 
-      # # measurment year (not invyr) is the correct sampling date
-      # d <- d %>%
-      #       mutate(yr = measyear) %>%
-      #       select(-invyr, -measyear)
-      #
-      # # operating at the subplot level
-      # d <- d %>% mutate(plot_id = subplot_id)
+            rename(macro_bpd = macro_breakpoint_dia) %>%
+            mutate(macroplot = is.finite(macro_bpd))
+
 
       d
 }

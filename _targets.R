@@ -1,40 +1,41 @@
 
 library(targets)
 tar_option_set(packages = c("tidyverse", "data.table", "janitor", "terra",
-                            "raster", "cmdstanr"))
+                            "raster", "cmdstanr", "wCorr", "furrr"))
 sapply(list.files("R", full.names = TRUE), source)
 tt <- tar_target
+options(future.globals.maxSize = 2000*1024^2)
 
 
 list(
       # data prep
       tt(fia, assemble_fia()),
       tt(fia_env, extract_fia(fia)),
-      tt(species, focal_species(fia_env)),
-      tt(trend_env, env_trends(fia, species)),
+      tt(species, focal_species(fia_env$annual)),
+      tt(trends, scale_trends(fia_env$trend, species)),
 
       # stan models
-      tt(recruitment_model, "stan/recruit_hurdle.stan", format = "file"),
-      tt(growth_model, "stan/growth_lm.stan", format = "file"),
-      tt(mortality_model, "stan/mortality.stan", format = "file"),
+      tt(recr_model, "stan/recruit_hurdle.stan", format = "file"),
+      tt(grow_model, "stan/growth_lm.stan", format = "file"),
+      tt(mort_model, "stan/mortality.stan", format = "file"),
 
       # model input data
-      tt(recruitment_data, prep_recruitment_data(fia, fia_env, species)),
-      tt(growth_data, prep_growth_data(fia_env, species)),
-      tt(mortality_data, prep_mortality_data(fia_env, species)),
+      tt(recr_data, prep_recruitment_data(fia, fia_env$annual, species)),
+      tt(grow_data, prep_growth_data(fia_env$annual, species)),
+      tt(mort_data, prep_mortality_data(fia_env$annual, species)),
 
       # model fitting
-      tt(recruitment_draws, fit_recruitment_model(recruitment_data, species, recruitment_model)),
-      tt(growth_draws, fit_growth_model(growth_data, species, growth_model)),
-      tt(mortality_draws, fit_mortality_model(mortality_data, species, mortality_model)),
+      tt(recr_draws, fit_models(recr_data, recr_model, dbh = F)),
+      tt(grow_draws, fit_models(grow_data, grow_model)),
+      tt(mort_draws, fit_models(mort_data, mort_model)),
 
-      # model predictions
-      tt(recruitment_pred, predict_recruitment(recruitment_draws, recruitment_data, trend_env, ndraws = 5)),
-      tt(growth_pred, predict_growth(growth_draws, growth_data, trend_env, ndraws = 5)),
-      tt(mortality_pred, predict_mortality(mortality_draws, mortality_data, trend_env, ndraws = 5)),
+      # # model predictions
+      tt(recr_pred, predict_recruitment(recr_draws, recr_data, trends, ndraws = 5)),
+      tt(grow_pred, predict_growth(grow_draws, grow_data, trends, ndraws = 5)),
+      tt(mort_pred, predict_mortality(mort_draws, mort_data, trends, ndraws = 5)),
 
       # evaluation
-      tt(eval, evaluate(recruitment_pred, growth_pred, mortality_pred))
+      tt(eval, evaluate(recr_pred, grow_pred, mort_pred))
 
 )
 

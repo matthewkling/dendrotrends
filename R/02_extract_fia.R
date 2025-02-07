@@ -2,8 +2,6 @@
 extract_fia <- function(trees){
       select <- dplyr::select
 
-      # trees <- readRDS("data/fia_trees.rds")
-
       # measurment year (not invyr) is the correct sampling date
       trees <- trees %>%
             mutate(yr = measyear) %>%
@@ -27,7 +25,6 @@ extract_fia <- function(trees){
             filter(is.finite(yr),
                    !is.na(status)) %>%
             mutate(inv = paste(plot_id, yr))
-      # 8,356,100
 
       # inventory summaries
       invn <- t %>%
@@ -43,7 +40,7 @@ extract_fia <- function(trees){
 
       # encode state and transition variables
       t <- t %>%
-            select(inv, yr, plot_id, sp, tree_id, status, class, dia) %>%
+            select(inv, yr, plot_id, sp, tree_id, status, class, dia, macroplot, macro_bpd) %>%
             filter(inv %in% invn$inv) %>%
             group_by(tree_id) %>%
 
@@ -91,8 +88,6 @@ extract_fia <- function(trees){
       # check that dataset does not contain excluded transition types
       if(any(t$trans %in% c("resurrected", "reverted"))) stop("reversions/resurrections detected")
 
-
-
       d <- t %>%
             filter(status != "dead",
                    ! final_survey) %>%
@@ -104,36 +99,20 @@ extract_fia <- function(trees){
                                           class == "a" & trans == "died" ~ "d")) %>%
             select(species = sp, plot_id, tree_id, dia, dia_next,
                    year = yr, year_next = yr_next,
+                   macroplot, macro_bpd,
                    class, class_next)
-      # 3,982,087
 
-      ### add densities
 
-      # identify macroplots
-      library(data.table)
-      plot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_PLOT.csv",
-                    stringsAsFactors = F, colClasses = c(CN = "character")) %>%
-            select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD, MACRO_BREAKPOINT_DIA,
-                   STATECD, UNITCD, COUNTYCD, PLOT,
-                   LAT, LON, ELEV) %>% as_tibble()
-      subplot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_SUBPLOT.csv", stringsAsFactors = F,
-                       colClasses = c(CN = "character", PLT_CN = "character")) %>%
-            select(PLT_CN, SUBP, SUBP_CN = CN, PREV_SBP_CN, POINT_NONSAMPLE_REASN_CD,
-                   SLOPE, ASPECT) %>% as_tibble()
-      macro <- plot %>%
-            left_join(subplot) %>%
-            mutate(PLOT_ID = paste(STATECD, UNITCD, COUNTYCD, PLOT),
-                   SUBPLOT_ID = paste(PLOT_ID, SUBP)) %>%
-            select(plot_id = SUBPLOT_ID, macro_bpd = MACRO_BREAKPOINT_DIA) %>%
-            mutate(macroplot = is.finite(macro_bpd)) %>%
-            distinct()
+      ### forest density ===================
 
       # FIA subplot land area, in ha:
       area <- base::pi * (c(micro = 6.8, sub = 24, macro = 58.9) / 3.28084) ^ 2 / 10000
 
+      ### baseline ###
+
       # basal area (of neighbors, NOT including self), in m2/ha
       d <- d %>%
-            left_join(macro) %>%
+            # left_join(macro) %>%
             mutate(dia_next = ifelse(is.na(dia_next), dia, dia_next),
                    diam = (dia + dia_next) / 2, # mean dbh over survey interval
                    ba = pi * (diam / 2 * 2.54 / 100) ^ 2, # basal area, in m2, e
@@ -167,32 +146,89 @@ extract_fia <- function(trees){
             ungroup() %>%
             mutate(n_j_het = n_j_tot - n_j_con,
                    n_a_het = n_a_tot - n_a_con)
-      # 3,982,087
 
 
-      #### add climate
-      library(terra)
+
+      ### trends ###
+
+      area <- base::pi * (c(micro = 6.8, sub = 24, macro = 58.9) / 3.28084) ^ 2 / 10000
+      # area <- area * 4 # if aggregating to plot level -- this is what was in the prior env_trends code!
+
+      # for each species, for each plot, we want trends for con_ba and tot_ba
+      dd <- trees %>%
+            mutate(species = paste(genus, species),
+                   # year = yr,
+                   adult = dia >= 5,
+                   ba = pi * (dia / 2 * 2.54 / 100) ^ 2, # basal area, in m2
+                   macro_bpd = ifelse(macroplot, macro_bpd, Inf)) %>%
+            filter(is.finite(ba), ba > 0) %>%
+            group_by(lon, lat, plot_id, yr) %>%
+            mutate(ba_tot = sum(ba[adult & dia < macro_bpd], na.rm = T) / area["sub"] + # adult + juvenile ba / ha
+                         sum(ba[adult & dia >= macro_bpd], na.rm = T) / area["macro"] +
+                         sum(ba[!adult], na.rm = T) / area["sub"]) %>%
+            group_by(lon, lat, plot_id, yr, species) %>%
+            mutate(ba_con = sum(ba[adult & dia < macro_bpd], na.rm = T) / area["sub"] + # adult + juvenile ba / ha
+                         sum(ba[adult & dia >= macro_bpd], na.rm = T) / area["macro"] +
+                         sum(ba[!adult], na.rm = T) / area["sub"]) %>%
+            group_by(species) %>%
+            mutate(ba_max = quantile(ba_tot, .95)) %>% # max density across all plots a species occurs in
+            group_by(plot_id) %>%
+            filter(min(ba_tot) > 0) %>%
+            ungroup() %>%
+            select(lon, lat, plot_id, species, yr,
+                   ba_tot, ba_con, ba_max) %>%
+            distinct()
+
+      bb <- dd %>%
+            select(lon, lat, plot_id, species, yr) %>%
+            na.omit() %>%
+            distinct() %>%
+            group_by(lon, lat, plot_id) %>%
+            filter(length(unique(yr)) >= 2) %>%
+            expand(species, yr) %>%
+            ungroup()
+
+      ba_trends <- left_join(bb, dd) %>%
+            mutate(ba_con = ifelse(is.na(ba_con), 0, ba_con)) %>%
+            group_by(plot_id, yr) %>%
+            mutate(ba_tot = ifelse(is.na(ba_tot), mean(ba_tot, na.rm = T), ba_tot)) %>%
+            group_by(plot_id) %>%
+            mutate(ba_max = weighted.mean(ba_max, ba_con, na.rm = T)) %>%
+            group_by(lon, lat, plot_id, species) %>%
+            summarize(ba_max = ba_max[1],
+                      ba_con_2000 = pmax(0, project(yr, ba_con, 2000)),
+                      ba_con_2020 = pmax(0, project(yr, ba_con, 2020))) %>%
+            group_by(plot_id) %>%
+            mutate(ba_tot_2000 = sum(ba_con_2000),
+                   ba_con_2000 = ifelse(ba_tot_2000 > ba_max, ba_con_2000 * ba_max / ba_tot_2000, ba_con_2000),
+                   ba_tot_2000 = pmin(ba_max, ba_tot_2000),
+
+                   ba_tot_2020 = sum(ba_con_2020),
+                   ba_con_2020 = ifelse(ba_tot_2020 > ba_max, ba_con_2020 * ba_max / ba_tot_2020, ba_con_2020),
+                   ba_tot_2020 = pmin(ba_max, ba_tot_2020)) %>%
+            ungroup()
+
+      # d <- left_join(d, dens)
+
+
+
+      ### climate =======================
+
       ll <- trees %>%
             filter(plot_id %in% unique(d$plot_id)) %>%
             dplyr::select(plot_id, lon, lat) %>%
             distinct()
-      clim <- list.files("/Volumes/T7/CHELSA/v2/raw", full.names = T,
-                         # pattern = "bio1_|bio5_|bio6_|bio12_"
-                         pattern = "bio1_|bio12_"
-      ) %>%
-            # c("/Volumes/T7/CHELSA/v2/derived/CHELSA_hydro_annual_1981-2010_V.2.1.tif") %>%
+
+      clim <- list.files("/Volumes/T7/CHELSA/v2/raw", full.names = T, pattern = "bio1_|bio12_") %>%
             rast(raw = TRUE) %>%
-            setNames(c("bio1", "bio12"#, "bio5", "bio6", "ppt", "pet", "aet", "cwd", "rnr"
-                       )) %>%
+            setNames(c("bio1", "bio12")) %>%
             extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
             as.data.frame() %>%
             as_tibble() %>%
-            mutate(plot_id = ll$plot_id) %>%
+            mutate(plot_id = ll$plot_id,
+                   bio1 = bio1 * 0.1 - 273.15,
+                   bio12 = bio12 * 0.1) %>%
             distinct()
-
-      clim <- mutate(clim,
-                     bio1 = bio1 * 0.1 - 273.15,
-                     bio12 = bio12 * 0.1)
 
       d <- d %>%
             left_join(clim) %>%
@@ -200,26 +236,134 @@ extract_fia <- function(trees){
       if(any(is.na(d$bio1))) stop("problem: NA climate values")
 
 
+      # trends
+      pr_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_pr_") %>%
+            rast() %>%
+            setNames(paste0("y", 1:nlyr(.))) %>%
+            extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
+            "/"(100) %>% log() %>%
+            apply(1, function(x) c(project(2000:2018, x, 2000),
+                                   project(2000:2018, x, 2020))) %>%
+            t() %>%
+            as.data.frame() %>%
+            setNames(c("bio12_2000", "bio12_2020")) %>%
+            as_tibble() %>%
+            mutate(plot_id = ll$plot_id) %>%
+            distinct()
+      tas_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_tas_") %>%
+            rast() %>%
+            setNames(paste0("y", 1:nlyr(.))) %>%
+            extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
+            "*"(0.1) %>% "+"(-273.15) %>%
+            apply(1, function(x) c(project(2000:2018, x, 2000),
+                                   project(2000:2018, x, 2020))) %>%
+            t() %>%
+            as.data.frame() %>%
+            setNames(c("bio1_2000", "bio1_2020")) %>%
+            as_tibble() %>%
+            mutate(plot_id = ll$plot_id) %>%
+            distinct()
+      clim_trends <- left_join(pr_ann, tas_ann)
 
-      #### add pollution
-      library(raster)
+      # d <- left_join(d, clim_trends)
+
+
+      ### pollution ============================
+
+      # CMAQ deposition data, 2002-2019
       f <- list.files("~/data/CMAQ/annual_total_adjusted_wet_deposition/",
                       full.names = T, pattern = "\\.tif", recursive = T)
-      poll <- c(f[grepl("ADJ_TOTDEP_N_CONUS", f)] %>% rast() %>% mean(),
-                f[grepl("ADJ_TOTDEP_S_CONUS", f)] %>% rast() %>% mean()) %>%
+
+      # average
+      poll <- c(f[grepl("ADJ_TOTDEP_N_CONUS", f)] %>% rast() %>% log() %>% mean(),
+                f[grepl("ADJ_TOTDEP_S_CONUS", f)] %>% rast() %>% log() %>% mean()) %>%
+            setNames(c("nitrogen", "sulfur"))
+
+      # trend
+      slope <- function(x, ...){
+            d <- x - mean(x)
+            w <- ((1:length(x) - 1) - (length(x)-1)/2)
+            weighted.mean(d/w, abs(w))
+      }
+      trend <- c(f[grepl("ADJ_TOTDEP_N_CONUS", f)] %>% rast() %>% log() %>% app(slope),
+                 f[grepl("ADJ_TOTDEP_S_CONUS", f)] %>% rast() %>% log() %>% app(slope)) %>%
+            setNames(c("nitrogen", "sulfur"))
+      py <- mean(2002:2019)
+      p2000 <- poll + trend * (2000 - py)
+      p2020 <- poll + trend * (2020 - py)
+
+      poll <- poll %>%
             setNames(c("nitrogen", "sulfur")) %>%
-            sqrt() ### note this ###
+            exp() %>% sqrt()
+      poll_trends <- c(p2000, p2020) %>%
+            setNames(c("nitrogen_2000", "sulfur_2000", "nitrogen_2020", "sulfur_2020")) %>%
+            exp() %>% sqrt()
+
       pts <- dplyr::select(d, lon, lat)
       coordinates(pts) <- c("lon", "lat")
       crs(pts) <- "+proj=longlat"
       pts <- spTransform(pts, crs(poll))
-      d <- cbind(d, terra::extract(poll, coordinates(pts)))
+      poll <- terra::extract(poll, coordinates(pts))
+      poll_trends <- terra::extract(poll_trends, coordinates(pts))
+
+      d <- cbind(d, poll)
+
+
+
+
+      # join and format trend data ===========
+
+      e <- d %>%
+            select(plot_id) %>%
+            bind_cols(poll_trends) %>%
+            distinct() %>%
+            left_join(ll) %>%
+            left_join(clim_trends) %>%
+            left_join(ba_trends) %>%
+            na.omit()
+      # write_csv(e, "data/env_trends.csv")
+
+      # from rgm_evaluation.R:
+      # projected environmental data for each plot
+      # e <- read_csv("data/env_trends.csv") %>%
+      e <- e %>%
+            mutate(ba_het_2000 = ba_tot_2000 - ba_con_2000,
+                   ba_het_2020 = ba_tot_2020 - ba_con_2020) %>%
+            mutate(ba_con_2000 = sqrt(ba_con_2000),
+                   ba_con_2020 = sqrt(ba_con_2020),
+                   ba_het_2000 = sqrt(ba_het_2000),
+                   ba_het_2020 = sqrt(ba_het_2020)) %>%
+            select(-ba_max) %>%
+            gather(var, value, -plot_id, -lon, -lat, -species) %>%
+            mutate(var = str_replace(var, "ba_", "ba")) %>%
+            separate(var, c("var", "year"), sep = "_") %>%
+            mutate(year = as.integer(year)) %>%
+            filter(year %in% c(2000, 2020),
+                   var != "batot")
+
+
       d <- filter(d, is.finite(nitrogen))
 
-      # export
-      # write_csv(d, "data/formatted_fia_data.csv")
+      list(annual = d,
+           trend = e)
+}
 
-      d
+scale_trends <- function(e, species){
 
+      scl <- species$scl
+
+      scl2 <- scl %>%
+            gather(var, value, -species) %>%
+            mutate(var = str_replace(var, "ba_", "ba")) %>%
+            separate(var, c("var", "stat"), sep = "_") %>%
+            spread(stat, value)
+
+      e %>%
+            left_join(scl2) %>%
+            mutate(value = (value - mean) / sd) %>%
+            dplyr::select(-mean, -sd) %>%
+            mutate(var = case_when(var == "bio1" ~ "temperature",
+                                   var == "bio12" ~ "precipitation",
+                                   TRUE ~ var))
 }
 
