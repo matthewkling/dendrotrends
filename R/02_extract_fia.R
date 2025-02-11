@@ -1,8 +1,11 @@
 
+# add environmental variables (forest density, climate, pollution) to FIA records
+
 extract_fia <- function(trees){
       select <- dplyr::select
 
       # measurment year (not invyr) is the correct sampling date
+      # note: this should move to assemble_fia(); also modify prep_recr_data() in tandem.
       trees <- trees %>%
             mutate(yr = measyear) %>%
             select(-invyr, -measyear)
@@ -208,9 +211,6 @@ extract_fia <- function(trees){
                    ba_tot_2020 = pmin(ba_max, ba_tot_2020)) %>%
             ungroup()
 
-      # d <- left_join(d, dens)
-
-
 
       ### climate =======================
 
@@ -218,23 +218,6 @@ extract_fia <- function(trees){
             filter(plot_id %in% unique(d$plot_id)) %>%
             dplyr::select(plot_id, lon, lat) %>%
             distinct()
-
-      clim <- list.files("/Volumes/T7/CHELSA/v2/raw", full.names = T, pattern = "bio1_|bio12_") %>%
-            rast(raw = TRUE) %>%
-            setNames(c("bio1", "bio12")) %>%
-            extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
-            as.data.frame() %>%
-            as_tibble() %>%
-            mutate(plot_id = ll$plot_id,
-                   bio1 = bio1 * 0.1 - 273.15,
-                   bio12 = bio12 * 0.1) %>%
-            distinct()
-
-      d <- d %>%
-            left_join(clim) %>%
-            left_join(ll)
-      if(any(is.na(d$bio1))) stop("problem: NA climate values")
-
 
       # trends
       pr_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_pr_") %>%
@@ -265,7 +248,14 @@ extract_fia <- function(trees){
             distinct()
       clim_trends <- left_join(pr_ann, tas_ann)
 
-      # d <- left_join(d, clim_trends)
+      # means
+      clim_means <- clim_trends %>%
+            mutate(bio1 = (bio1_2000 + bio1_2020) / 2,
+                   bio12 = (bio12_2000 + bio12_2020) / 2) %>%
+            select(plot_id, bio1, bio12)
+      d <- d %>%
+            left_join(clim_means) %>%
+            left_join(ll)
 
 
       ### pollution ============================
@@ -309,8 +299,6 @@ extract_fia <- function(trees){
       d <- cbind(d, poll)
 
 
-
-
       # join and format trend data ===========
 
       e <- d %>%
@@ -321,11 +309,7 @@ extract_fia <- function(trees){
             left_join(clim_trends) %>%
             left_join(ba_trends) %>%
             na.omit()
-      # write_csv(e, "data/env_trends.csv")
 
-      # from rgm_evaluation.R:
-      # projected environmental data for each plot
-      # e <- read_csv("data/env_trends.csv") %>%
       e <- e %>%
             mutate(ba_het_2000 = ba_tot_2000 - ba_con_2000,
                    ba_het_2020 = ba_tot_2020 - ba_con_2020) %>%
@@ -346,24 +330,5 @@ extract_fia <- function(trees){
 
       list(annual = d,
            trend = e)
-}
-
-scale_trends <- function(e, species){
-
-      scl <- species$scl
-
-      scl2 <- scl %>%
-            gather(var, value, -species) %>%
-            mutate(var = str_replace(var, "ba_", "ba")) %>%
-            separate(var, c("var", "stat"), sep = "_") %>%
-            spread(stat, value)
-
-      e %>%
-            left_join(scl2) %>%
-            mutate(value = (value - mean) / sd) %>%
-            dplyr::select(-mean, -sd) %>%
-            mutate(var = case_when(var == "bio1" ~ "temperature",
-                                   var == "bio12" ~ "precipitation",
-                                   TRUE ~ var))
 }
 

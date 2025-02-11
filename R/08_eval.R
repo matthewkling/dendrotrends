@@ -1,15 +1,15 @@
 
-evaluate <- function(recruitment_pred, growth_pred, mortality_pred){
+evaluate <- function(recr_pred, grow_pred, mort_pred){
+
+      tar_load(recr_pred)
+      tar_load(grow_pred)
+      tar_load(mort_pred)
 
       # combine results ==========
       add_model <- function(x, tag) lapply(x, function(y) mutate(y, model = tag))
-      growth_pred <- add_model(growth_pred, "growth")
-      mortality_pred <- add_model(mortality_pred, "mortality")
-      recruitment_pred <- add_model(recruitment_pred, "recruitment")
-
-      # baseline <- bind_rows(growth_pred$baseline,
-      #                       recruitment_pred$baseline,
-      #                       mortality_pred$baseline)
+      grow_pred <- add_model(grow_pred, "growth")
+      mort_pred <- add_model(mort_pred, "mortality")
+      recr_pred <- add_model(recr_pred, "recruitment")
 
       w <- 10
       h <- 10
@@ -18,7 +18,7 @@ evaluate <- function(recruitment_pred, growth_pred, mortality_pred){
       # baseline ==============
 
       # HL
-      mort <- mortality_pred$baseline %>%
+      mort <- mort_pred$baseline %>%
             group_by(model, species) %>%
             mutate(bin = decile(pred)) %>%
             group_by(model, species, bin) %>%
@@ -26,47 +26,54 @@ evaluate <- function(recruitment_pred, growth_pred, mortality_pred){
                       obs = weighted.mean(obs, t),
                       t = mean(t),
                       pred = multi2ann(pred, t) %>% logit(),
-                      obs = multi2ann(obs, t) %>% logit())
-      recr <- recruitment_pred$baseline %>%
+                      obs = multi2ann(obs, t) %>% logit(),
+                      .groups = "drop")
+      recr <- recr_pred$baseline %>%
             group_by(model, species) %>%
             mutate(bin = decile(pred)) %>%
             group_by(model, species, bin, t) %>%
             summarize(pred = mean(pred),
                       obs = mean(obs),
-                      n = n()) %>%
+                      n = n(),
+                      .groups = "drop") %>%
             group_by(model, species, bin) %>%
             summarize(pred = weighted.mean(pred, n*t) %>% log10(),
-                      obs = weighted.mean(obs, n*t) %>% log10())
-      grow <- growth_pred$baseline %>%
+                      obs = weighted.mean(obs, n*t) %>% log10(),
+                      .groups = "drop")
+      grow <- grow_pred$baseline %>%
             group_by(model, species) %>%
             mutate(bin = decile(pred)) %>%
             group_by(model, species, bin) %>%
             summarize(pred = weighted.mean(pred, t),
                       obs = weighted.mean(obs, t),
-                      t = mean(t))
+                      t = mean(t),
+                      .groups = "drop")
       hl <- bind_rows(grow, recr, mort)
 
       # means
-      mort <- mortality_pred$baseline %>%
+      mort <- mort_pred$baseline %>%
             group_by(model, species) %>%
             summarize(pred = weighted.mean(pred, t),
                       obs = weighted.mean(obs, t),
                       weight = sum(t),
                       t = mean(t),
                       pred = multi2ann(pred, t) %>% logit(),
-                      obs = multi2ann(obs, t) %>% logit())
-      grow <- growth_pred$baseline %>%
+                      obs = multi2ann(obs, t) %>% logit(),
+                      .groups = "drop")
+      grow <- grow_pred$baseline %>%
             group_by(model, species) %>%
             summarize(pred = weighted.mean(pred, t),
                       obs = weighted.mean(obs, t),
                       weight = sum(t),
-                      t = mean(t))
-      recr <- recruitment_pred$baseline %>%
+                      t = mean(t),
+                      .groups = "drop")
+      recr <- recr_pred$baseline %>%
             group_by(model, species) %>%
             summarize(pred = weighted.mean(pred, t) %>% log10(),
                       obs = weighted.mean(obs, t) %>% log10(),
                       weight = sum(t),
-                      t = mean(t))
+                      t = mean(t),
+                      .groups = "drop")
       spm <- bind_rows(grow, recr, mort)
 
       p <- hl %>%
@@ -85,9 +92,9 @@ evaluate <- function(recruitment_pred, growth_pred, mortality_pred){
 
       # trends ===============
 
-      trend <- bind_rows(growth_pred$trend,
-                         recruitment_pred$trend,
-                         mortality_pred$trend)
+      trend <- bind_rows(grow_pred$trend,
+                         recr_pred$trend,
+                         mort_pred$trend)
 
       p <- trend %>%
             group_by(model) %>%
@@ -95,7 +102,8 @@ evaluate <- function(recruitment_pred, growth_pred, mortality_pred){
             group_by(model, bin) %>%
             summarize(drdt_pred = weighted.mean(drdt_pred, tree_yrs),
                       drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      tree_yrs = sum(tree_yrs)) %>%
+                      tree_yrs = sum(tree_yrs),
+                      .groups = "drop") %>%
             ggplot(aes(drdt_pred, drdt_obs)) +
             facet_wrap(~model, scales = "free", nrow = 2) +
             geom_vline(xintercept = 0, color = "gray") +
@@ -119,7 +127,93 @@ evaluate <- function(recruitment_pred, growth_pred, mortality_pred){
       p <- trend %>% group_by(model, species, bin) %>% scat()
       ggsave("figures/eval/trend_scatter_spgeog.pdf", p, width = w, height = h, units = "in")
 
-      trend
+
+
+
+      # combined plot ========
+
+      pd <- trend %>%
+            group_by(species, model) %>%
+            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
+                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
+                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
+                      n = sum(tree_yrs),
+                      .groups = "drop") %>%
+            group_by(model) %>%
+            mutate(n = n / max(n),
+                   group = "species")
+
+      pd <- trend %>%
+            group_by(bin, model) %>%
+            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
+                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
+                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
+                      n = sum(tree_yrs),
+                      .groups = "drop") %>%
+            group_by(model) %>%
+            mutate(n = n / max(n),
+                   group = "communities") %>%
+            bind_rows(pd)
+
+      pd <- trend %>%
+            group_by(model) %>%
+            mutate(bin = as.character(decile(drdt_pred))) %>%
+            group_by(bin, model) %>%
+            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
+                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
+                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
+                      n = sum(tree_yrs),
+                      .groups = "drop") %>%
+            group_by(model) %>%
+            mutate(n = n / max(n),
+                   group = "prediction deciles") %>%
+            bind_rows(pd)
+
+      pd <- pd %>%
+            mutate(group = factor(group, levels = c("species", "communities", "prediction deciles")))
+
+      pd <- filter(pd, n > .001)
+
+      pdm <- pd %>%
+            group_by(model, group) %>%
+            summarize(drdt_obs = weighted.mean(drdt_obs, n),
+                      drdt_pred = weighted.mean(drdt_pred, n), .groups = "drop")
+
+      plt <- function(mod){
+            ggplot(mapping = aes(drdt_obs, drdt_pred)) +
+                  facet_grid(group~model, scales = "free") +
+                  geom_vline(xintercept = 0, color = "gray") +
+                  geom_hline(yintercept = 0, color = "gray") +
+                  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
+                  geom_smooth(data = pd %>% filter(model == mod), aes(weight = n),
+                              method = lm, color = "black", alpha = .2) +
+                  geom_point(data = pd %>% filter(model == mod),
+                             aes(size = n, fill = r), color = "black", shape = 21) +
+                  geom_point(data = pdm %>% filter(model == mod), size = 5) +
+                  scale_fill_gradientn(colors = c("darkred","orangered", "gray", "dodgerblue", "darkblue"),
+                                        limits = max(abs(pd$r[is.finite(pd$r)])) * c(-1, 1)) +
+                  scale_size_continuous(limits = 0:1) +
+                  theme_bw() +
+                  theme(strip.text = element_text(color = "white"),
+                        strip.background = element_rect(fill = "black")) +
+                  labs(x = "observed rate of change",
+                       y = "predicted rate of change",
+                       size = "tree-years",
+                       color = "within-group\ncorrelation")
+      }
+
+      library(patchwork)
+      p <- (plt("growth") +
+                  theme(strip.background.y = element_blank(),
+                        axis.title.x = element_blank())) +
+            (plt("mortality") +
+                   theme(strip.background.y = element_blank(),
+                         axis.title.y = element_blank())) +
+            (plt("recruitment") +
+                   theme(axis.title = element_blank())) +
+            plot_layout(nrow = 1, guides = "collect")
+      ggsave("figures/eval/combined_scatters.pdf", p, width = 10, height = 7, units = "in")
+
 }
 
 
@@ -131,12 +225,12 @@ scat <- function(trend){
             group_by(model) %>%
             summarize(drdt_obs = weighted.mean(drdt_obs, tree_yrs),
                       drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      r = NA, n = NA)
+                      r = NA, n = NA, .groups = "drop")
       tr <- trend %>%
             summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
                       drdt_pred = weighted.mean(drdt_pred, tree_yrs),
                       drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      n = sum(tree_yrs))
+                      n = sum(tree_yrs), .groups = "drop")
       ggplot(tr, aes(drdt_obs, drdt_pred, weight = n, color = r)) +
             facet_wrap(~model, scales = "free", ncol = 2) +
             geom_vline(xintercept = 0, color = "gray") +
@@ -182,93 +276,3 @@ scat_pct <- function(x){
                  color = "within-group\nHL correlation")
 }
 
-
-
-z <- function(){
-
-      fm <- bind_rows(read_csv("data/eval_growth.csv") %>% mutate(model = "growth"),
-                      read_csv("data/eval_mortality.csv") %>% mutate(model = "mortality"),
-                      read_csv("data/eval_recruitment.csv") %>% mutate(model = "recruitment"))
-
-
-      pd <- fm %>%
-            group_by(species, model) %>%
-            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
-                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      n = sum(tree_yrs)) %>%
-            group_by(model) %>%
-            mutate(n = n / max(n),
-                   group = "species")
-
-      pd <- fm %>%
-            group_by(bin, model) %>%
-            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
-                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      n = sum(tree_yrs)) %>%
-            group_by(model) %>%
-            mutate(n = n / max(n),
-                   group = "communities") %>%
-            bind_rows(pd)
-
-      pd <- fm %>%
-            group_by(model) %>%
-            mutate(bin = as.character(decile(drdt_pred))) %>%
-            group_by(bin, model) %>%
-            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
-                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      n = sum(tree_yrs)) %>%
-            group_by(model) %>%
-            mutate(n = n / max(n),
-                   group = "prediction deciles") %>%
-            bind_rows(pd)
-
-      pd <- pd %>%
-            mutate(group = factor(group, levels = c("species", "communities", "prediction deciles")))
-
-      pdm <- pd %>%
-            group_by(model, group) %>%
-            summarize(drdt_obs = weighted.mean(drdt_obs, n),
-                      drdt_pred = weighted.mean(drdt_pred, n))
-
-      plt <- function(mod){
-            ggplot(mapping = aes(drdt_obs, drdt_pred)) +
-                  facet_grid(group~model, scales = "free") +
-                  geom_vline(xintercept = 0, color = "gray") +
-                  geom_hline(yintercept = 0, color = "gray") +
-                  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
-                  geom_smooth(data = pd %>% filter(model == mod), aes(weight = n),
-                              method = lm, color = "black", alpha = .2) +
-                  geom_point(data = pd %>% filter(model == mod), aes(size = n, color = r)) +
-                  geom_point(data = pdm %>% filter(model == mod), size = 5) +
-                  # scale_color_gradient2(mid = "gray", limits = max(abs(pd$r[is.finite(pd$r)])) * c(-1, 1)) +
-                  scale_color_gradientn(colors = c("darkred","orangered", "gray", "dodgerblue", "darkblue"),
-                                        limits = max(abs(pd$r[is.finite(pd$r)])) * c(-1, 1)) +
-                  scale_size_continuous(limits = 0:1) +
-                  theme_bw() +
-                  theme(strip.text = element_text(color = "white"),
-                        strip.background = element_rect(fill = "black")) +
-                  labs(x = "observed rate of change",
-                       y = "predicted rate of change",
-                       size = "tree-years",
-                       color = "within-group\ncorrelation")
-      }
-
-      p <- (plt("growth") +
-                  coord_cartesian(xlim = c(-.01, NA)) +
-                  theme(strip.background.y = element_blank(),
-                        axis.title.x = element_blank())) +
-            (plt("mortality") +
-                   theme(strip.background.y = element_blank(),
-                         axis.title.y = element_blank())) +
-            (plt("recruitment") +
-                   coord_cartesian(xlim = c(-2, NA),
-                                   ylim = c(-4, NA)) +
-                   theme(axis.title = element_blank())) +
-            plot_layout(nrow = 1, guides = "collect")
-      ggsave("figures/rgm/eval/combined_scatters.pdf", p, width = 10, height = 7, units = "in")
-
-
-}

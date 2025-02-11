@@ -25,7 +25,7 @@ list(
       tt(mort_data, prep_mortality_data(fia_env$annual, species)),
 
       # model fitting
-      tt(recr_draws, fit_models(recr_data, recr_model, dbh = F)),
+      tt(recr_draws, fit_models(recr_data, recr_model)),
       tt(grow_draws, fit_models(grow_data, grow_model)),
       tt(mort_draws, fit_models(mort_data, mort_model)),
 

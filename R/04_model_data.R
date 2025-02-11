@@ -26,11 +26,9 @@ prep_recruitment_data <- function(trees, fia_env, species){
 
       r <- r %>%
             group_by(plot_id) %>%
-            ##### filter(yr %in% rev(sort(unique(yr)))[1:2]) %>% # only use data from the two most recent surveys [recently updated to remove this]
             mutate(plot_first_yr = min(yr)) %>%
             group_by(plot_id, tree_id) %>%
             mutate(tree_first_yr = min(yr)) %>%
-            # tree_min_dia = min(dia)
             filter(length(unique(sp)) == 1) %>%
             ungroup() %>%
             mutate(recruit = yr == tree_first_yr & yr != plot_first_yr
@@ -41,34 +39,33 @@ prep_recruitment_data <- function(trees, fia_env, species){
             )
 
 
-      # identify macroplots
-      library(data.table)
-      plot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_PLOT.csv",
-                    stringsAsFactors = F, colClasses = c(CN = "character")) %>%
-            select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD, MACRO_BREAKPOINT_DIA,
-                   STATECD, UNITCD, COUNTYCD, PLOT,
-                   LAT, LON, ELEV) %>% as_tibble()
-      subplot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_SUBPLOT.csv", stringsAsFactors = F,
-                       colClasses = c(CN = "character", PLT_CN = "character")) %>%
-            select(PLT_CN, SUBP, SUBP_CN = CN, PREV_SBP_CN, POINT_NONSAMPLE_REASN_CD,
-                   SLOPE, ASPECT) %>% as_tibble()
-      macro <- plot %>%
-            left_join(subplot) %>%
-            mutate(PLOT_ID = paste(STATECD, UNITCD, COUNTYCD, PLOT),
-                   SUBPLOT_ID = paste(PLOT_ID, SUBP)) %>%
-            select(plot_id = PLOT_ID,
-                   subplot_id = SUBPLOT_ID,
-                   macro_bpd = MACRO_BREAKPOINT_DIA) %>%
-            mutate(macroplot = is.finite(macro_bpd)) %>%
-            distinct()
+      # # identify macroplots
+      # library(data.table)
+      # plot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_PLOT.csv",
+      #               stringsAsFactors = F, colClasses = c(CN = "character")) %>%
+      #       select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD, MACRO_BREAKPOINT_DIA,
+      #              STATECD, UNITCD, COUNTYCD, PLOT,
+      #              LAT, LON, ELEV) %>% as_tibble()
+      # subplot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_SUBPLOT.csv", stringsAsFactors = F,
+      #                  colClasses = c(CN = "character", PLT_CN = "character")) %>%
+      #       select(PLT_CN, SUBP, SUBP_CN = CN, PREV_SBP_CN, POINT_NONSAMPLE_REASN_CD,
+      #              SLOPE, ASPECT) %>% as_tibble()
+      # macro <- plot %>%
+      #       left_join(subplot) %>%
+      #       mutate(PLOT_ID = paste(STATECD, UNITCD, COUNTYCD, PLOT),
+      #              SUBPLOT_ID = paste(PLOT_ID, SUBP)) %>%
+      #       select(plot_id = PLOT_ID,
+      #              subplot_id = SUBPLOT_ID,
+      #              macro_bpd = MACRO_BREAKPOINT_DIA) %>%
+      #       mutate(macroplot = is.finite(macro_bpd)) %>%
+      #       distinct()
 
       # FIA subplot land area, in ha:
       area <- base::pi * (c(micro = 6.8, sub = 24, macro = 58.9) / 3.28084) ^ 2 / 10000
-
       area <- area * 4 # if aggregating to plot level
 
       rr <- r %>%
-            left_join(ungroup(macro)) %>%
+            # left_join(ungroup(macro)) %>%
             mutate(yr1 = yr == plot_first_yr,
                    adult = dia >= 5,
                    ba = pi * (dia / 2 * 2.54 / 100) ^ 2, # basal area, in m2, e
@@ -95,7 +92,7 @@ prep_recruitment_data <- function(trees, fia_env, species){
 
 
       d <- fia_env %>%
-            mutate(bio12 = log(bio12)) %>%
+            # mutate(bio12 = log(bio12)) %>%
             filter(!str_detect(species, "spp")) %>%
             na.omit() %>%
             mutate(plot_id = str_sub(plot_id, 1, -3))
@@ -141,7 +138,7 @@ prep_growth_data <- function(d, species){
 
       # d <- read_csv("data/formatted_fia_data.csv")
       d <- d %>%
-            mutate(bio12 = log(bio12)) %>%
+            # mutate(bio12 = log(bio12)) %>%
             filter(!str_detect(species, "spp")) %>%
             na.omit()
 
@@ -185,7 +182,7 @@ prep_mortality_data <- function(d, species){
 
       # d <- read_csv("data/formatted_fia_data.csv")
       d <- d %>%
-            mutate(bio12 = log(bio12)) %>%
+            # mutate(bio12 = log(bio12)) %>%
             na.omit() %>%
             filter(species %in% spp) %>%
             filter(class != "d")

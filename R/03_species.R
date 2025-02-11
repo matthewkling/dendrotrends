@@ -5,7 +5,7 @@ focal_species <- function(d){
 
       # d <- read_csv("data/formatted_fia_data.csv")
       d <- d %>%
-            mutate(bio12 = log(bio12)) %>%
+            # mutate(bio12 = log(bio12)) %>%
             filter(!str_detect(species, "spp")) %>%
             na.omit()
 
@@ -54,3 +54,24 @@ focal_species <- function(d){
            scl = scl,
            gscl = gscl)
 }
+
+
+scale_trends <- function(e, species){
+
+      scl <- species$scl
+
+      scl2 <- scl %>%
+            gather(var, value, -species) %>%
+            mutate(var = str_replace(var, "ba_", "ba")) %>%
+            separate(var, c("var", "stat"), sep = "_") %>%
+            spread(stat, value)
+
+      e %>%
+            left_join(scl2) %>%
+            mutate(value = (value - mean) / sd) %>%
+            dplyr::select(-mean, -sd) %>%
+            mutate(var = case_when(var == "bio1" ~ "temperature",
+                                   var == "bio12" ~ "precipitation",
+                                   TRUE ~ var))
+}
+
