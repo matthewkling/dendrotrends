@@ -17,4 +17,8 @@ parameters {
 
 model {
       y ~ normal(x1 * beta, sigma);
+
+      beta[1] ~ normal(0, 10);
+      for(i in 2:(P+1)) beta[i] ~ normal(0, 1);
+      sigma ~ normal(0, 0.1);
 }

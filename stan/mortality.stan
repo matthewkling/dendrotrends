@@ -17,4 +17,7 @@ parameters {
 
 model {
       y ~ bernoulli(1 - (1 - 1/(1 + exp(- x1 * beta))) .^ t);
+
+      beta[1] ~ normal(0, 10);
+      for(i in 2:(P+1)) beta[i] ~ normal(0, 1);
 }

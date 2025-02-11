@@ -47,4 +47,11 @@ model {
             real mu_i = dot_product(mu, x1[i,]);
             target += hurdle_lognormal_lpdf(y[i] | mu_i, sigma, zeta_i);
       }
+
+      zeta[1] ~ normal(0, 10);
+      for(i in 2:(P+1)) zeta[i] ~ normal(0, 1);
+
+      mu[1] ~ normal(0, 10);
+      for(i in 2:(P+1)) mu[i] ~ normal(0, 1);
+      sigma ~ normal(0, 1);
 }
