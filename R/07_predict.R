@@ -28,10 +28,10 @@ diagnose <- function(x){
 
       s <- get_summary(x) %>%
             group_by(sp) %>%
-            summarize(poor_mixing = max(rhat) > 1.05, .groups = "drop")
+            summarize(poor_mixing = max(rhat[variable != "sigma"]) > 1.05, .groups = "drop")
       v <- left_join(d, s, by = join_by(sp)) %>%
             mutate(valid = !divergence & !poor_mixing & all_chains)
-      message(round(mean(v$valid) * 100), "% of species have valid fits.")
+      message(round(mean(v$valid) * 100), "% of species have acceptable MCMC diagnostics.")
       v
 }
 
@@ -41,6 +41,20 @@ valid_draws <- function(x){
                                     paste(v$sp[!v$valid], collapse = ", "))
       get_draws(x) %>%
             filter(sp %in% v$sp[v$valid])
+}
+
+esr_data <- function(x){
+      x %>%
+            filter(i == i[1], # fixme: should average over draws rather than sampling one
+                   ! var %in% c("dbh", "intercept")) %>%
+            dplyr::select(-lon, -lat) %>%
+            rename(exposure = value,
+                   sensitivity = param_value) %>%
+            mutate(response = exposure * sensitivity) %>%
+            gather(stat, value, exposure, sensitivity, response) %>%
+            mutate(year = paste0("y", year)) %>%
+            spread(year, value) %>%
+            mutate(delta = (y2020 - y2000) / 20)
 }
 
 
@@ -60,12 +74,15 @@ predict_growth <- function(grow_draws, grow_data, trends, ndraws){
 
       ### trends ================================
 
-      # join env trends to obs trees
+      # join FIA data, env trends, and fitted params
       ode <- expand_env_obs(od, trends)
+      fe <- left_join(fi, ode, relationship = "many-to-many",  by = join_by(species, var))
 
-      # combine with fitted parameters and calculate predicted growth
-      fe <- fi %>%
-            left_join(ode, relationship = "many-to-many", by = join_by(species, var)) %>%
+      # exposure-sensitivity-response data
+      esr <- esr_data(fe)
+
+      # combine with fitted parameters and calculate predicted mortality
+      fe <- fe %>%
             group_by(i, species, plot_id, tree_id, year, t) %>%
             summarize(pred = sum(param_value * value),
                       .groups = "drop")
@@ -101,6 +118,7 @@ predict_growth <- function(grow_draws, grow_data, trends, ndraws){
 
 
       list(baseline = fdp,
+           esr = esr,
            trend = fm)
 
 }
@@ -122,12 +140,15 @@ predict_mortality <- function(mort_draws, mort_data, trends, ndraws){
 
       ### trends ================================
 
-      # join env trends to obs trees
+      # join FIA data, env trends, and fitted params
       ode <- expand_env_obs(od, trends)
+      fe <- left_join(fi, ode, relationship = "many-to-many", by = join_by(species, var))
+
+      # exposure-sensitivity-response data
+      esr <- esr_data(fe)
 
       # combine with fitted parameters and calculate predicted mortality
-      fe <- fi %>%
-            left_join(ode, relationship = "many-to-many", by = join_by(species, var)) %>%
+      fe <- fe %>%
             group_by(i, species, plot_id, tree_id, year, t) %>%
             summarize(pred = sum(param_value * value),
                       .groups = "drop") %>%
@@ -137,7 +158,7 @@ predict_mortality <- function(mort_draws, mort_data, trends, ndraws){
       mt <- od %>%
             select(species, plot_id, tree_id, t, year, obs) %>%
             distinct() %>%
-            mutate(obs = obs / t * 2) %>% # convert from multiyear to annual ### fixme?? should it be *2 since mean mort occurrd halfway thru period?
+            mutate(obs = obs / t * 2) %>% # convert from multiyear to annual
             group_by(species, plot_id) %>%
             reframe(nreps = length(unique(year)),
                     tree_yrs = sum(t),
@@ -162,6 +183,7 @@ predict_mortality <- function(mort_draws, mort_data, trends, ndraws){
             mutate(bin = paste(plyr::round_any(lon, 3), plyr::round_any(lat, 3)))
 
       list(baseline = fdp,
+           esr = esr,
            trend = fm)
 
 }
@@ -218,15 +240,18 @@ predict_recruitment <- function(recr_draws, recr_data, trends, ndraws){
             group_by(plot_id, lon, lat, species, year, var) %>%
             summarize(value = mean(value), .groups = "drop")
 
+      # join FIA data, env trends, and fitted params
       ode <- expand_env_obs(od, ptrends) %>%
             group_by(species, plot_id) %>%
             mutate(t = unique(na.omit(t))) %>% # make sure t is present for all params
             ungroup()
+      fe <- left_join(fi, ode, relationship = "many-to-many", by = join_by(species, var))
 
+      # exposure-sensitivity-response data
+      esr <- esr_data(fe)
 
-      # combine with fitted parameters and calculate predicted rate
-      fe <- fi %>%
-            left_join(ode) %>%
+      # combine with fitted parameters and calculate predicted mortality
+      fe <- fe %>%
             group_by(i, species, plot_id, param, year, t) %>%
             summarize(pred = sum(param_value * value),
                       .groups = "drop")
@@ -267,6 +292,7 @@ predict_recruitment <- function(recr_draws, recr_data, trends, ndraws){
             filter(is.finite(drdt_pred), is.finite(drdt_obs))
 
       list(baseline = fdp,
+           esr = esr,
            trend = fm)
 
 }
@@ -275,9 +301,9 @@ predict_recruitment <- function(recr_draws, recr_data, trends, ndraws){
 
 
 # fitted parameter values
-load_fits <- function(x, i){
+load_fits <- function(x, i = NULL){
 
-      x %>%
+      x <- x %>%
             dplyr::select(-lp__) %>%
             gather(param, value, contains("[")) %>%
             mutate(param = str_remove(param, "\\]"),
@@ -287,9 +313,11 @@ load_fits <- function(x, i){
                                 "2" = "bacon", "3" = "bahet",
                                 "4" = "sulfur", "5" = "nitrogen",
                                 "6" = "temperature", "7" = "precipitation",
-                                "8" = "dbh")) %>%
-            filter(.draw %in% sample(unique(.draw), i)) %>%
-            dplyr::select(i = .draw, species = sp, var, param, param_value = value)
+                                "8" = "dbh"))
+
+      if(!is.null(i)) x <- x %>%  filter(.draw %in% sample(unique(.draw), i))
+
+      x %>% dplyr::select(i = .draw, species = sp, var, param, param_value = value)
 }
 
 # observed data
@@ -332,7 +360,8 @@ expand_env_obs <- function(od, e){
       ode <- od %>%
             dplyr::select(species, plot_id, tree_id) %>%
             distinct() %>%
-            left_join(e, by = join_by(species, plot_id)) %>%
+            left_join(e, by = join_by(species, plot_id),
+                      relationship = "many-to-many") %>%
             na.omit()
 
       # add trends in diameter and intercept

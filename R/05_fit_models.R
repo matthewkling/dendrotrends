@@ -4,7 +4,7 @@ fit_models <- function(d, model_file, n_cores = 9){
       # whether to include DBH as predictor
       dbh <- !str_detect(model_file, "recr")
 
-      # MCMCM initial values
+      # MCMC initial values
       npreds <- ifelse(dbh, 7, 6)
       init <- switch(model_file,
                      "stan/mortality.stan" = function() list(beta = c(runif(1, -4, -3), # intercept
@@ -18,15 +18,16 @@ fit_models <- function(d, model_file, n_cores = 9){
                                                                          rnorm(npreds, 0, .1)),
                                                                   sigma = runif(1, .03, .09)))
 
-
       d <- split(d, d$species)
 
       model <- cmdstan_model(model_file)
 
       fit_model <- function(ds, dbh, init){
 
+            # independent variable
             y <- ds$outcome
 
+            # predictors
             x <- cbind(ds$bacon,
                        ds$bahet,
                        ds$sulfur,
@@ -35,6 +36,7 @@ fit_models <- function(d, model_file, n_cores = 9){
                        ds$bio12)
             if(dbh) x <- cbind(x, ds$dia)
 
+            # years between inventories
             t <- ds$t
 
             data <- list(N = nrow(x),
@@ -55,5 +57,6 @@ fit_models <- function(d, model_file, n_cores = 9){
       }
 
       future::plan(multisession, workers = n_cores)
-      d[sample(length(d))] %>% future_map(possibly(fit_model), dbh = dbh, init = init)
+      d[sample(length(d))] %>%
+            future_map(possibly(fit_model), dbh = dbh, init = init)
 }

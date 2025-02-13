@@ -1,7 +1,8 @@
 
 library(targets)
 tar_option_set(packages = c("tidyverse", "data.table", "janitor", "terra",
-                            "raster", "cmdstanr", "wCorr", "furrr"))
+                            "raster", "cmdstanr", "wCorr", "furrr", "patchwork",
+                            "ggridges"))
 sapply(list.files("R", full.names = TRUE), source)
 tt <- tar_target
 options(future.globals.maxSize = 2000*1024^2)
@@ -35,7 +36,15 @@ list(
       tt(mort_pred, predict_mortality(mort_draws, mort_data, trends, ndraws = 5)),
 
       # evaluation
-      tt(eval, evaluate(recr_pred, grow_pred, mort_pred))
+      tt(eval, evaluate(recr_pred, grow_pred, mort_pred)),
+      tt(scatter, combined_scatter(eval)),
 
-)
+      # plots
+      tt(esr, compile_esr(recr_pred, grow_pred, mort_pred)),
+      tt(exp_plt, exposure_plots(esr, trends, species)),
+      tt(sens_plt, sensitivity_plots(esr, species, recr_draws, grow_draws, mort_draws)),
+      tt(resp_plt, response_plots(esr, trends)),
+      tt(imp_plt, importance_plots(esr, species))
+
+      )
 
