@@ -11,7 +11,7 @@ options(future.globals.maxSize = 2000*1024^2)
 list(
       # data prep
       tt(fia, assemble_fia()),
-      tt(fia_env, extract_fia(fia)),
+      tt(fia_env, add_environment(fia)),
       tt(species, focal_species(fia_env$annual)),
       tt(trends, scale_trends(fia_env$trend, species)),
 
