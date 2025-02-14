@@ -977,8 +977,8 @@ response_plots <- function(f, e){
                                          values = c(0, .35, .5, .65, 1),
                                          limits = lims)
             color <- scale_color_gradientn(colors = c("darkorchid4", "darkmagenta", "gray", "forestgreen", "darkgreen"),
-                                         values = c(0, .35, .5, .65, 1),
-                                         limits = lims)
+                                           values = c(0, .35, .5, .65, 1),
+                                           limits = lims)
 
             cmap <- pdll %>% filter(str_detect(model, m)) %>%
                   mutate(value = clamp(value, lims[1], lims[2])) %>%
@@ -1070,68 +1070,142 @@ response_plots <- function(f, e){
                                   "growth" = "sqrt(%AGR) / yr",
                                   "survival" = "logit(probability) / yr"))
 
-            # cdens <- pd %>%
-            #       filter(model == m) %>%
-            #       mutate(value = clamp(value, lims[1], lims[2])) %>%
-            #       group_by(lon, lat) %>%
-            #       summarize(median = median(value, na.rm = T),
-            #                 q95 = quantile(value, .95, na.rm = T),
-            #                 q25 = quantile(value, .25, na.rm = T),
-            #                 q75 = quantile(value, .75, na.rm = T),
-            #                 q05 = quantile(value, .05, na.rm = T)) %>%
-            #       ungroup() %>%
-            #       arrange(median) %>%
-            #       mutate(cell = paste(lon, lat),
-            #              cell = factor(cell, levels = unique(cell))) %>%
-            #       ggplot(aes(color = after_stat(x))) +
-            #       # geom_link(aes(x = q05, xend = q95, y = cell, yend = cell),
-            #       #           n = 20, linewidth = .7, alpha = .3) +
-            #       geom_link(aes(x = q05, xend = q95, y = cell, yend = cell),
-            #                 n = 10, linewidth = .25) +
-            #       geom_point(aes(median, cell), size = .1, color = "black") +
-            #       geom_vline(xintercept = 0, color = "black") +
-            #       color +
-            #       scale_x_continuous(expand = c(0, 0), limits = lims, breaks = brks) +
-            #       # scale_y_discrete(expand = expansion(mult = c(.025, .05))) +
-            #       theme_bw() +
-            #       theme(legend.position = "none",
-            #             panel.grid = element_blank(),
-            #             panel.background = element_blank(),
-            #             plot.background = element_blank(),
-            #             axis.title.y = element_blank(),
-            #             axis.text.y = element_blank(),
-            #             axis.ticks.y = element_blank(),
-            #             strip.text = element_text(color = "white"),
-            #             strip.background = element_rect(fill = "black")) +
-            #       labs(x = switch(m,
-            #                       "recruitment" = "N / m2 / ha / yr",
-            #                       "growth" = "sqrt(%AGR) / yr",
-            #                       "survival" = "logit(probability) / yr"))
-            # cdens
+            cdens <- pd %>%
+                  filter(model == m) %>%
+                  mutate(value = clamp(value, lims[1], lims[2])) %>%
+                  group_by(lon, lat) %>%
+                  summarize(median = median(value, na.rm = T),
+                            q95 = quantile(value, .95, na.rm = T),
+                            q25 = quantile(value, .25, na.rm = T),
+                            q75 = quantile(value, .75, na.rm = T),
+                            q05 = quantile(value, .05, na.rm = T)) %>%
+                  ungroup() %>%
+                  arrange(median) %>%
+                  mutate(cell = paste(lon, lat),
+                         cell = factor(cell, levels = unique(cell))) %>%
+                  ggplot(aes(color = after_stat(x))) +
+                  # geom_link(aes(x = q05, xend = q95, y = cell, yend = cell),
+                  #           n = 20, linewidth = .7, alpha = .3) +
+                  geom_link(aes(x = q05, xend = q95, y = cell, yend = cell),
+                            n = 100, linewidth = .15) +
+                  geom_point(aes(median, cell), size = .1, color = "black") +
+                  geom_vline(xintercept = 0, color = "black") +
+                  color +
+                  scale_x_continuous(expand = c(0, 0), limits = lims, breaks = brks) +
+                  # scale_y_discrete(expand = expansion(mult = c(.025, .05))) +
+                  theme_bw() +
+                  theme(legend.position = "none",
+                        panel.grid = element_blank(),
+                        panel.background = element_blank(),
+                        plot.background = element_blank(),
+                        axis.title = element_blank(),
+                        axis.text = element_blank(),
+                        axis.ticks = element_blank(),
+                        strip.text = element_text(color = "white"),
+                        strip.background = element_rect(fill = "black")) +
+                  labs(x = switch(m,
+                                  "recruitment" = "N / m2 / ha / yr",
+                                  "growth" = "sqrt(%AGR) / yr",
+                                  "survival" = "logit(probability) / yr"))
 
             cmap <- cmap + scale_y_continuous(limits = c(NA, NA))
-            cmap + sdens + plot_layout(heights = c(1, 1.25), ncol = 1)
+            cmap + cdens + sdens + plot_layout(heights = c(1, 1.25, 1.25), ncol = 1)
 
       }
 
       p <- c("recruitment", "growth", "survival") %>%
             map(response_plot_native) %>%
             Reduce("|", .)
-      ggsave("figures/response/response_maps_dens_native.pdf", p, width = 8, height = 4.5, units = "in")
+      ggsave("figures/response/response_maps_dens_native.pdf", p, width = 8, height = 7, units = "in")
 
 
-      # # data too genuinely multidimensional for ordination:
-      # pdsp %>%
-      #       select(-lon, -lat) %>%
-      #       spread(model, pp) %>%
-      #       select(-species) %>%
-      #       na.omit() %>%
-      #       prcomp()
-      # pdll %>% ungroup() %>%
-      #       spread(model, pp) %>%
-      #       select(-lon, -lat) %>%
-      #       na.omit() %>%
-      #       prcomp()
+
+      # compare changes in the three vital rates
+
+      pdg <- bind_rows(pdll %>% ungroup() %>%
+                           mutate(group = paste(lon, lat), level = "community") %>%
+                           select(model, group, value, level),
+                     pdsp %>% ungroup() %>%
+                           mutate(group = species, level = "species") %>%
+                           select(model, group, value, level))
+
+      pdg1 <- pdg %>%
+            group_by(model) %>%
+            mutate(value = (rank(value)-1)/(length(value)-1)) %>%
+            spread(model, value) %>%
+            ecoclim::pairsData(xy_vars = c("growth", "recruitment", "survival"),
+                               z_vars = c("group", "level"),
+                               mirror = TRUE)
+      pdg2 <- pdg %>%
+            group_by(model, level) %>%
+            summarize(value = ecdf(value)(0), .groups = "drop") %>%
+            spread(model, value) %>%
+            ecoclim::pairsData(xy_vars = c("growth", "recruitment", "survival"),
+                               z_vars = c("level"),
+                               mirror = TRUE)
+
+
+      p <- ggplot(mapping = aes(x_value, y_value, color = level, fill = level,
+                       size = level)) +
+            facet_grid(y_var ~ x_var) +
+            geom_hline(data = pdg2, aes(yintercept = y_value, color = level)) +
+            geom_vline(data = pdg2, aes(xintercept = x_value, color = level)) +
+            geom_point(data = pdg1) +
+            geom_smooth(data = pdg1, linewidth = 1, method = lm) +
+            scale_size_manual(values = c(.1, 1)) +
+            scale_color_manual(values = c("orangered", "darkblue")) +
+            scale_fill_manual(values = c("orangered", "darkblue")) +
+            coord_fixed() +
+            theme_bw() +
+            theme(strip.text = element_text(color = "white"),
+                  strip.background = element_rect(fill = "black"),
+                  legend.position = "bottom") +
+            labs(x = "modeled rate of change in demographic rate listed at top (rank)",
+                 y = "modeled rate of chagne in demographic rate listed at right (rank)",
+                 color = NULL, fill = NULL, size = NULL)
+      ggsave("figures/response/response_pairs.pdf", p, width = 6, height = 6.5, units = "in")
+
+      # correlations at various levels (quantifying the pattern in the above plot)
+      pdg <- pd %>%
+            mutate(plot_id = ifelse(model == "recruitment", plot_id,
+                                    str_sub(plot_id, 1, -3)),
+                   cell = paste(plyr::round_any(lon, 3),
+                                plyr::round_any(lat, 3))) %>%
+            group_by(species, model, plot_id, cell) %>%
+            summarize(value = weighted.mean(value, n, na.rm = T),
+                      n = sum(n, na.rm = T),
+                      .groups = "drop") %>%
+            ungroup()
+      pdg <- bind_rows(pdg %>% mutate(level = "spp-plt") %>%
+                             group_by(species, plot_id) %>% mutate(n = sum(n, na.rm = T)),
+                       pdg %>% group_by(species, model) %>%
+                             summarize(value = weighted.mean(value, n, na.rm = T),
+                                       n = sum(n, na.rm = T),
+                                       level = "spp") %>%
+                             group_by(species) %>% mutate(n = sum(n)),
+                       pdg %>% group_by(cell, model) %>%
+                             summarize(value = weighted.mean(value, n, na.rm = T),
+                                       n = sum(n, na.rm = T),
+                                       level = "cell") %>%
+                             group_by(cell) %>% mutate(n = sum(n)),
+                       pdg %>% group_by(plot_id, model) %>%
+                             summarize(value = weighted.mean(value, n, na.rm = T),
+                                       n = sum(n, na.rm = T),
+                                       level = "plt") %>%
+                             group_by(plot_id) %>% mutate(n = sum(n)))
+      r <- pdg %>%
+            spread(model, value) %>%
+            filter(is.finite(recruitment),
+                   is.finite(growth),
+                   is.finite(survival)) %>%
+            group_by(level) %>%
+            summarize(pearson_gr = weightedCorr(growth, recruitment, method = "Pearson", weights = n),
+                      pearson_gs = weightedCorr(growth, survival, method = "Pearson", weights = n),
+                      pearson_sr = weightedCorr(survival, recruitment, method = "Pearson", weights = n),
+                      spearman_gr = weightedCorr(growth, recruitment, method = "Spearman", weights = n),
+                      spearman_gs = weightedCorr(growth, survival, method = "Spearman", weights = n),
+                      spearman_sr = weightedCorr(survival, recruitment, method = "Spearman", weights = n))
+
 
 
       ### demographic compensation ------------------------
