@@ -300,7 +300,6 @@ predict_recruitment <- function(recr_draws, recr_data, trends, ndraws){
       list(baseline = fdp,
            esr = esr,
            trend = fm)
-
 }
 
 
@@ -330,9 +329,7 @@ load_fits <- function(x, i = NULL){
 load_obs <- function(x){
       x %>%
             mutate(intercept = 1,
-                   year = (year + year_next) / 2#,
-                   # plot_id = str_sub(plot_id, 1, -3)
-            ) %>%
+                   year = (year + year_next) / 2) %>%
             rename(obs = outcome) %>%
             dplyr::select(species, plot_id, tree_id, year, obs, t,
                           intercept, dbh = dia, bacon, bahet, sulfur, nitrogen, temperature = bio1, precipitation = bio12) %>%
@@ -374,18 +371,17 @@ expand_env_obs <- function(od, e){
       ode <- od %>%
             filter(var %in% c("dbh", "intercept")) %>%
             group_by(species, plot_id, tree_id, var) %>%
-            reframe(value1 = mean(value), # could project here instead of averaging
+            reframe(value1 = mean(value),
                     t = sum(t),
                     value = project(year, value, c(2009, 2010)),
                     year = c(2009, 2010)) %>%
             mutate(value = ifelse(is.finite(value), value, value1)) %>%
             dplyr::select(-value1) %>%
             bind_rows(ode)
-      # ode
 
       ode %>%
             group_by(species, plot_id, tree_id, year) %>%
-            mutate(nrows = n()) %>% ungroup() %>% #count(nrows)
+            mutate(nrows = n()) %>% ungroup() %>%
             filter(nrows == nterms) %>%
             dplyr::select(-nrows)
 }

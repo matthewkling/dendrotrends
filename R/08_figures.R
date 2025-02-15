@@ -1302,18 +1302,6 @@ importance_plots <- function(f, species){
 
       ### combined importance -----------------
 
-      # browse <- function(x) browser()
-      # f %>%
-      #       filter(stat == "response",
-      #              var != "combined") %>%
-      #       filter(model == "growth") %>%
-      #       group_by(i, species, model, plot_id, stat, tree_id) %>%
-      #       reframe(#x = browse(value),
-      #             value = c(abs(sum(value)), sum(abs(value)), sd(value)),
-      #             var = c("sum", "magnitude", "stdev"),
-      #             n = n())
-
-
       am <- f %>%
             filter(var != "combined") %>%
             group_by(species, model) %>%
@@ -1322,31 +1310,6 @@ importance_plots <- function(f, species){
             summarize(mav = mean(abs(value), na.rm = T),
                       mav_wt = weighted.mean(abs(value), w = sp_wt, na.rm = T),
                       amv = abs(mean(value, na.rm = T)))
-
-      # am %>%
-      #       factor_var() %>%
-      #       gather(metric, value, mav, amv) %>%
-      #       group_by(metric, model, stat) %>%
-      #       mutate(value = value / max(value)) %>%
-      #       spread(metric, value) %>%
-      #       ggplot(aes(mav, var, fill = stat)) +
-      #       facet_grid(. ~ model, scales = "free") +
-      #       geom_bar(stat = "identity", position = "dodge", width = .5, color = "white") +
-      #       geom_segment(aes(x = 0, xend = amv), position = position_dodge(width = .5),
-      #                    color = "black") +
-      #       geom_point(aes(x = amv), position = position_dodge(width = .5),
-      #                  shape = 21, color = "black", size = 3) +
-      #       scale_fill_manual(values = c("orangered", "dodgerblue", "purple")) +
-      #       scale_x_continuous(limits = c(0, 1.1), expand = c(0, 0),
-      #                          breaks = c(0, .5, 1), labels = c("0", "0.5", "1")) +
-      #       theme_bw() +
-      #       theme(strip.text = element_text(color = "white"),
-      #             strip.background = element_rect(fill = "black"),
-      #             panel.grid = element_blank()) +
-      #       labs(y = NULL,
-      #            x = "relative strength",
-      #            fill = NULL)
-
 
       p <- am %>%
             mutate(category = case_when(var %in% c("temperature", "precipitation") ~ "climate",
@@ -1461,19 +1424,20 @@ importance_plots <- function(f, species){
       ggsave("figures/importance/importance_bars_global.pdf", p, width = 8, height = 5, units = "in")
 
 
-      # pd <- f %>%
-      #       filter(var == "combined") %>%
-      #       left_join(select(e, plot_id, lon, lat) %>% distinct()) %>%
-      #       group_by(species, model) %>%
-      #       mutate(lat = decile(lat)) %>%
-      #       group_by(species, model, lat) %>%
-      #       summarize(ppos = mean(value > 0, na.rm = T)) %>%
-      #       group_by(model, lat) %>%
-      #       summarize(ppos = median(ppos))
-      #
-      # pd %>%
-      #       ggplot(aes(lat, ppos, color = model)) +
-      #       geom_line()
 
+      # variance partitioning -- fixme
+      # am <- f %>%
+      #       select(-plot_id, -tree_id, -t, -y2009, -y2010, -delta, -param) %>%
+      #       filter(var != "combined") %>%
+      #       mutate(var = as.character(var)) %>%
+      #       left_join(scl) %>%
+      #       mutate(value = ifelse(stat %in% c("exposure", "sensitivity"), value * sd, value)) %>%
+      #       select(-sd, -mean) %>%
+      #       left_join(gscl) %>%
+      #       mutate(value = ifelse(stat %in% c("exposure", "sensitivity"), value / sd, value)) %>%
+      #       select(-sd, -mean)
+      # z <- am %>%
+      #       unite(var, stat, var) %>%
+      #       spread(var, value)
 
 }

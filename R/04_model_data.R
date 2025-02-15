@@ -2,8 +2,6 @@
 
 prep_recruitment_data <- function(trees, fia_env, species){
 
-      # note: recruitment is plot-level, rather than subplot- or tree-level
-
       select <- dplyr::select
       spp <- species$spp
       scl <- species$scl
@@ -38,39 +36,15 @@ prep_recruitment_data <- function(trees, fia_env, species){
                    & status == "live"
             )
 
-
-      # # identify macroplots
-      # library(data.table)
-      # plot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_PLOT.csv",
-      #               stringsAsFactors = F, colClasses = c(CN = "character")) %>%
-      #       select(PLT_CN = CN, MANUAL, DESIGNCD, PLOT_STATUS_CD, MACRO_BREAKPOINT_DIA,
-      #              STATECD, UNITCD, COUNTYCD, PLOT,
-      #              LAT, LON, ELEV) %>% as_tibble()
-      # subplot <- fread("~/data/FIA/2024_03/CSV_FIADB_ENTIRE/ENTIRE_SUBPLOT.csv", stringsAsFactors = F,
-      #                  colClasses = c(CN = "character", PLT_CN = "character")) %>%
-      #       select(PLT_CN, SUBP, SUBP_CN = CN, PREV_SBP_CN, POINT_NONSAMPLE_REASN_CD,
-      #              SLOPE, ASPECT) %>% as_tibble()
-      # macro <- plot %>%
-      #       left_join(subplot) %>%
-      #       mutate(PLOT_ID = paste(STATECD, UNITCD, COUNTYCD, PLOT),
-      #              SUBPLOT_ID = paste(PLOT_ID, SUBP)) %>%
-      #       select(plot_id = PLOT_ID,
-      #              subplot_id = SUBPLOT_ID,
-      #              macro_bpd = MACRO_BREAKPOINT_DIA) %>%
-      #       mutate(macroplot = is.finite(macro_bpd)) %>%
-      #       distinct()
-
       # FIA subplot land area, in ha:
       area <- base::pi * (c(micro = 6.8, sub = 24, macro = 58.9) / 3.28084) ^ 2 / 10000
-      area <- area * 4 # if aggregating to plot level
+      area <- area * 4 # aggregate to plot level
 
       rr <- r %>%
-            # left_join(ungroup(macro)) %>%
             mutate(yr1 = yr == plot_first_yr,
                    adult = dia >= 5,
                    ba = pi * (dia / 2 * 2.54 / 100) ^ 2, # basal area, in m2, e
                    macro_bpd = ifelse(macroplot, macro_bpd, Inf)) %>%
-            ##### group_by(plot_id, sp, yr, yr1) %>%
             group_by(plot_id, sp, yr) %>%
             summarize(recruits = sum(recruit, na.rm = T) / area["micro"], # recruits / ha
                       n = sum(adult & dia < macro_bpd) / area["sub"] + # adult popn / ha
@@ -89,10 +63,7 @@ prep_recruitment_data <- function(trees, fia_env, species){
                    rec_ba = recruits/ba/t,
                    rec_n = recruits/n/t)
 
-
-
       d <- fia_env %>%
-            # mutate(bio12 = log(bio12)) %>%
             filter(!str_detect(species, "spp")) %>%
             na.omit() %>%
             mutate(plot_id = str_sub(plot_id, 1, -3))
@@ -128,17 +99,18 @@ prep_recruitment_data <- function(trees, fia_env, species){
                    bio12 = (bio12 - bio12_mean) / bio12_sd) %>%
             filter(is.finite(rec_ba)) %>% na.omit()
 
-      d %>% mutate(outcome = rec_ba) %>% filter(species %in% spp)
+      d %>% mutate(outcome = rec_ba) %>% filter(species %in% spp) %>%
+            select(plot_id, species, yr0, yr1, t, outcome,
+                   bacon, bahet, sulfur, nitrogen, bio1, bio12)
 }
 
 prep_growth_data <- function(d, species){
 
+      select <- dplyr::select
       spp <- species$spp
       scl <- species$scl
 
-      # d <- read_csv("data/formatted_fia_data.csv")
       d <- d %>%
-            # mutate(bio12 = log(bio12)) %>%
             filter(!str_detect(species, "spp")) %>%
             na.omit()
 
@@ -154,9 +126,6 @@ prep_growth_data <- function(d, species){
             mutate(dia = log((dia + dia_next) / 2), # average diameter over survey interval
                    ba_con = ba_j_con + ba_a_con,
                    ba_het = ba_j_het + ba_a_het) %>%
-            # mutate(bacon = log(ba_con),
-            #        bacon = ifelse(!is.finite(bacon), NA, bacon),
-            #        bahet = log(ba_het + 1)) %>%
             mutate(bacon = sqrt(ba_con),
                    bahet = sqrt(ba_het)) %>%
             left_join(scl) %>%
@@ -172,17 +141,18 @@ prep_growth_data <- function(d, species){
             mutate(spid = as.integer(factor(species)),
                    agr = ifelse(agr < 0, 0, agr)) # clamp dependent var to nonnegative
 
-      dd %>% mutate(outcome = sqrt(agr)) %>% filter(species %in% spp)
+      dd %>% mutate(outcome = sqrt(agr)) %>% filter(species %in% spp) %>%
+            select(plot_id, lon, lat, species, tree_id, year, year_next, t, outcome,
+                   bacon, bahet, sulfur, nitrogen, bio1, bio12, dia)
 }
 
 prep_mortality_data <- function(d, species){
+
       select <- dplyr::select
       spp <- species$spp
       scl <- species$scl
 
-      # d <- read_csv("data/formatted_fia_data.csv")
       d <- d %>%
-            # mutate(bio12 = log(bio12)) %>%
             na.omit() %>%
             filter(species %in% spp) %>%
             filter(class != "d")
@@ -200,5 +170,7 @@ prep_mortality_data <- function(d, species){
                    bio1 = (bio1 - bio1_mean) / bio1_sd,
                    bio12 = (bio12 - bio12_mean) / bio12_sd)
 
-      dd %>% mutate(outcome = mortality) %>% filter(species %in% spp)
+      dd %>% mutate(outcome = mortality) %>% filter(species %in% spp) %>%
+            select(plot_id, lon, lat, species, tree_id, year, year_next, t, outcome,
+                   bacon, bahet, sulfur, nitrogen, bio1, bio12, dia)
 }

@@ -3,9 +3,7 @@ focal_species <- function(d){
 
       select <- dplyr::select
 
-      # d <- read_csv("data/formatted_fia_data.csv")
       d <- d %>%
-            # mutate(bio12 = log(bio12)) %>%
             filter(!str_detect(species, "spp")) %>%
             na.omit()
 
@@ -13,7 +11,6 @@ focal_species <- function(d){
             select(species, plot_id) %>% distinct() %>%
             count(species) %>%
             arrange(desc(n)) %>% slice(1:100) %>% pull(species)
-      # saveRDS(spp, "data/focal_species.rds")
 
       scl <- d %>%
             filter(species %in% spp) %>%
@@ -31,7 +28,6 @@ focal_species <- function(d){
                                       bio1,
                                       bio12), # log native units
                          .funs = list(mean = mean, sd = sd), na.rm = T)
-      # write_csv(scl, "data/var_scl.rds")
 
       gscl <- d %>%
             filter(species %in% spp) %>%
@@ -48,7 +44,6 @@ focal_species <- function(d){
                                       bio1,
                                       bio12), # log native units
                          .funs = list(mean = mean, sd = sd), na.rm = T)
-      # write_csv(gscl, "data/var_scl_global.rds")
 
       list(spp = spp,
            scl = scl,

@@ -12,7 +12,6 @@ add_environment <- function(trees){
 
       # operating at the subplot level
       trees <- trees %>% mutate(plot_id = subplot_id)
-      # 11,991,835
 
       # initial cleaning
       t <- trees %>%
@@ -115,7 +114,6 @@ add_environment <- function(trees){
 
       # basal area (of neighbors, NOT including self), in m2/ha
       d <- d %>%
-            # left_join(macro) %>%
             mutate(dia_next = ifelse(is.na(dia_next), dia, dia_next),
                    diam = (dia + dia_next) / 2, # mean dbh over survey interval
                    ba = pi * (diam / 2 * 2.54 / 100) ^ 2, # basal area, in m2, e
@@ -155,7 +153,6 @@ add_environment <- function(trees){
       ### trends ###
 
       area <- base::pi * (c(micro = 6.8, sub = 24, macro = 58.9) / 3.28084) ^ 2 / 10000
-      # area <- area * 4 # if aggregating to plot level -- this is what was in the prior env_trends code!
 
       # for each species, for each plot, we want trends for con_ba and tot_ba
       dd <- trees %>%
@@ -195,21 +192,13 @@ add_environment <- function(trees){
             mutate(ba_con = ifelse(is.na(ba_con), 0, ba_con)) %>%
             group_by(plot_id, yr) %>%
             mutate(ba_tot = ifelse(is.na(ba_tot), mean(ba_tot, na.rm = T), ba_tot)) %>%
-            group_by(plot_id) %>%
-            mutate(ba_max = weighted.mean(ba_max, ba_con, na.rm = T)) %>%
+            mutate(ba_het = ba_tot - ba_con) %>%
             group_by(lon, lat, plot_id, species) %>%
-            summarize(ba_max = ba_max[1],
-                      ba_con_2009 = pmax(0, project(yr, ba_con, 2009)),
-                      ba_con_2010 = pmax(0, project(yr, ba_con, 2010))) %>%
-            group_by(plot_id) %>%
-            mutate(ba_tot_2009 = sum(ba_con_2009),
-                   ba_con_2009 = ifelse(ba_tot_2009 > ba_max, ba_con_2009 * ba_max / ba_tot_2009, ba_con_2009),
-                   ba_tot_2009 = pmin(ba_max, ba_tot_2009),
-
-                   ba_tot_2010 = sum(ba_con_2010),
-                   ba_con_2010 = ifelse(ba_tot_2010 > ba_max, ba_con_2010 * ba_max / ba_tot_2010, ba_con_2010),
-                   ba_tot_2010 = pmin(ba_max, ba_tot_2010)) %>%
-            ungroup()
+            summarize(ba_con_2009 = pmax(0, project(yr, ba_con, 2009)),
+                      ba_con_2010 = pmax(0, project(yr, ba_con, 2010)),
+                      ba_het_2009 = pmax(0, project(yr, ba_het, 2009)),
+                      ba_het_2010 = pmax(0, project(yr, ba_het, 2010)),
+                      .groups = "drop")
 
 
       ### climate =======================
@@ -311,13 +300,10 @@ add_environment <- function(trees){
             na.omit()
 
       e <- e %>%
-            mutate(ba_het_2009 = ba_tot_2009 - ba_con_2009,
-                   ba_het_2010 = ba_tot_2010 - ba_con_2010) %>%
             mutate(ba_con_2009 = sqrt(ba_con_2009),
                    ba_con_2010 = sqrt(ba_con_2010),
                    ba_het_2009 = sqrt(ba_het_2009),
                    ba_het_2010 = sqrt(ba_het_2010)) %>%
-            select(-ba_max) %>%
             gather(var, value, -plot_id, -lon, -lat, -species) %>%
             mutate(var = str_replace(var, "ba_", "ba")) %>%
             separate(var, c("var", "year"), sep = "_") %>%
