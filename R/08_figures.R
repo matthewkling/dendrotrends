@@ -1123,11 +1123,11 @@ response_plots <- function(f, e){
       # compare changes in the three vital rates
 
       pdg <- bind_rows(pdll %>% ungroup() %>%
-                           mutate(group = paste(lon, lat), level = "community") %>%
-                           select(model, group, value, level),
-                     pdsp %>% ungroup() %>%
-                           mutate(group = species, level = "species") %>%
-                           select(model, group, value, level))
+                             mutate(group = paste(lon, lat), level = "community") %>%
+                             select(model, group, value, level),
+                       pdsp %>% ungroup() %>%
+                             mutate(group = species, level = "species") %>%
+                             select(model, group, value, level))
 
       pdg1 <- pdg %>%
             group_by(model) %>%
@@ -1146,7 +1146,7 @@ response_plots <- function(f, e){
 
 
       p <- ggplot(mapping = aes(x_value, y_value, color = level, fill = level,
-                       size = level)) +
+                                size = level)) +
             facet_grid(y_var ~ x_var) +
             geom_hline(data = pdg2, aes(yintercept = y_value, color = level)) +
             geom_vline(data = pdg2, aes(xintercept = x_value, color = level)) +
@@ -1425,19 +1425,106 @@ importance_plots <- function(f, species){
 
 
 
-      # variance partitioning -- fixme
-      # am <- f %>%
-      #       select(-plot_id, -tree_id, -t, -y2009, -y2010, -delta, -param) %>%
-      #       filter(var != "combined") %>%
-      #       mutate(var = as.character(var)) %>%
-      #       left_join(scl) %>%
-      #       mutate(value = ifelse(stat %in% c("exposure", "sensitivity"), value * sd, value)) %>%
-      #       select(-sd, -mean) %>%
-      #       left_join(gscl) %>%
-      #       mutate(value = ifelse(stat %in% c("exposure", "sensitivity"), value / sd, value)) %>%
-      #       select(-sd, -mean)
-      # z <- am %>%
-      #       unite(var, stat, var) %>%
-      #       spread(var, value)
+      # variance partitioning  -----------------------------------------------
+
+      am <- f %>%
+            select(#-plot_id, -tree_id,
+                  -t, -y2009, -y2010, -delta, -param) %>%
+            filter(var != "combined") %>%
+            filter(stat %in% c("exposure", "sensitivity")) %>%
+            mutate(var = as.character(var)) %>%
+            left_join(scl) %>%
+            mutate(value = value * sd) %>%
+            select(-sd, -mean) %>%
+            left_join(gscl) %>%
+            mutate(value = value / sd) %>%
+            select(-sd, -mean) %>%
+            unite(var, stat, var)
+      vars <- unique(am$var)
+      z <- filter(am, var == vars[1]) %>%
+            rename(!!vars[1] := value) %>%
+            select(-var)
+      for(v in vars[2:length(vars)]) z <- z %>%
+            left_join(filter(am, var == v) %>%
+                            rename(!!v := value) %>%
+                            select(-var),
+                      by = join_by(i, species, model, plot_id, tree_id))
+      z <- f %>%
+            select(-t, -y2009, -y2010, -delta, -param) %>%
+            filter(var == "combined") %>%
+            left_join(z) %>%
+            rename(response = value) %>%
+            select(-var)
+
+      vp <- unique(z$model) %>%
+            map(function(m){
+                  zz <- z %>% filter(model == m) %>% sample_n(50000)
+                  vp <- rdacca.hp::rdacca.hp(zz$response,
+                                             select(zz, exposure_bacon:sensitivity_precipitation))
+                  vp$Hier.part %>%
+                        as.data.frame() %>%
+                        mutate(total_explained = vp$Total_explained_variation,
+                               model = m) %>%
+                        rownames_to_column("var")
+            })
+
+      vps <- vp %>%
+            bind_rows() %>%
+            separate(var, c("stat", "var"), sep = "_") %>%
+            janitor::clean_names() %>%
+            mutate(percent = i_perc_percent * total_explained) %>%
+            mutate(group = case_when(var %in% c("temperature", "precipitation") ~ "climate",
+                                     var %in% c("bacon", "bahet") ~ "forest density",
+                                     var %in% c("nitrogen", "sulfur") ~ "pollution"))
+      vps <- vps %>%
+            filter(var == "bacon", stat == "exposure") %>%
+            mutate(var = "unexplained", stat = NA, group = "",
+                   percent = 100 * (1 - total_explained)) %>%
+            bind_rows(vps)
+
+      p <- vps %>%
+            ggplot(aes(var, percent/100, fill = stat)) +
+            facet_grid(group~model, scales = "free_y", space = "free_y") +
+            geom_bar(stat = "identity", position = "stack") +
+            coord_flip() +
+            scale_y_continuous(labels = scales::percent) +
+            scale_fill_manual(values = c("orangered", "dodgerblue")) +
+            theme_bw() +
+            theme(strip.text = element_text(color = "white"),
+                  strip.background = element_rect(fill = "black", color = "black"),
+                  axis.title.y = element_blank()) +
+            labs(y = "portion of response variation explained",
+                 fill = NULL)
+      ggsave("figures/importance/variance_paritioned.pdf",
+             p, width = 8, height = 5, units = "in")
+
+      p <- vps %>%
+            arrange(model) %>%
+            group_by(model) %>%
+            mutate(var = factor(var, levels = c("temperature", "precipitation",
+                                                "bacon", "bahet", "sulfur", "nitrogen",
+                                                "unexplained")),
+                   group = factor(group, levels = (c("climate", "forest density", "pollution", "")))) %>%
+            arrange(model, var, stat) %>%
+            mutate(pcum = cumsum(percent)) %>%
+            ggplot(aes(x = var, y = (pcum - percent/2)/100,
+                       width = 1, height = percent/100,
+                       fill = stat)) +
+            facet_grid(model ~ group,
+                       scales = "free_x", space = "free_x") +
+            geom_tile() +
+            scale_y_continuous(labels = scales::percent) +
+            scale_fill_manual(values = c("orangered", "dodgerblue")) +
+            theme_bw() +
+            theme(strip.text = element_text(color = "white"),
+                  strip.background = element_rect(fill = "black", color = "black"),
+                  axis.title.x = element_blank(),
+                  panel.grid.major.x = element_blank(),
+                  panel.grid = element_line(linewidth = .25),
+                  legend.position = "right") +
+            labs(y = "cumulative portion of modeled response variation explained",
+                 fill = NULL)
+      ggsave("figures/importance/variance_paritioned_cumulative.pdf",
+             p, width = 8, height = 8, units = "in")
 
 }
