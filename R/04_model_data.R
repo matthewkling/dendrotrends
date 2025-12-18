@@ -1,13 +1,12 @@
 
 
-prep_recruitment_data <- function(trees, fia_env, species){
+prep_recruitment_data <- function(trees, fia_env, species, summarize = TRUE){
 
       select <- dplyr::select
       spp <- species$spp
       scl <- species$scl
 
       r <- trees %>%
-            mutate(yr = measyear) %>%
             mutate(sp = paste(genus, species)) %>%
             mutate(status = recode(statuscd,
                                    "1" = "live", "2" = "dead", "3" = "harvested",
@@ -41,8 +40,7 @@ prep_recruitment_data <- function(trees, fia_env, species){
       area <- area * 4 # aggregate to plot level
 
       rr <- r %>%
-            mutate(yr1 = yr == plot_first_yr,
-                   adult = dia >= 5,
+            mutate(adult = dia >= 5,
                    ba = pi * (dia / 2 * 2.54 / 100) ^ 2, # basal area, in m2, e
                    macro_bpd = ifelse(macroplot, macro_bpd, Inf)) %>%
             group_by(plot_id, sp, yr) %>%
@@ -59,16 +57,16 @@ prep_recruitment_data <- function(trees, fia_env, species){
                     recruits = recruits[(1:nn)+1],
                     yr0 = yr[1:nn],
                     yr1 = yr[(1:nn)+1]) %>%
-            mutate(t = yr1 - yr0,
-                   rec_ba = recruits/ba/t,
-                   rec_n = recruits/n/t)
+            mutate(t = yr1 - yr0) %>%
+            filter(sp %in% spp,
+                   !is.na(t))
 
       d <- fia_env %>%
             filter(!str_detect(species, "spp")) %>%
             na.omit() %>%
             mutate(plot_id = str_sub(plot_id, 1, -3))
 
-      # average environmental vars across subplots and trees
+      # average predictor vars across subplots and years
       d <- d %>%
             group_by(plot_id, species) %>%
             filter(!is.na(year_next),
@@ -83,25 +81,83 @@ prep_recruitment_data <- function(trees, fia_env, species){
                       bio12 = mean(bio12, na.rm = T),
                       nitrogen = mean(nitrogen, na.rm = T),
                       sulfur = mean(sulfur, na.rm = T)) %>%
-            ungroup() %>%
-            rename(sp = species)
+            ungroup()
 
-      d <- left_join(rr, d) %>%
-            rename(species = sp)
-
+      # standardize predictors
       d <- d %>%
             left_join(scl) %>%
-            mutate(bacon = (sqrt(ba) - bacon_mean) / bacon_sd,
+            mutate(bacon = (sqrt(ba_a_con) - bacon_mean) / bacon_sd,
                    bahet = (sqrt(ba_a_het) - bahet_mean) / bahet_sd,
                    nitrogen = (nitrogen - nitrogen_mean) / nitrogen_sd,
                    sulfur = (sulfur - sulfur_mean) / sulfur_sd,
                    bio1 = (bio1 - bio1_mean) / bio1_sd,
-                   bio12 = (bio12 - bio12_mean) / bio12_sd) %>%
-            filter(is.finite(rec_ba)) %>% na.omit()
+                   bio12 = (bio12 - bio12_mean) / bio12_sd)
 
-      d %>% mutate(outcome = rec_ba) %>% filter(species %in% spp) %>%
-            select(plot_id, species, yr0, yr1, t, outcome,
+      d <- rr %>%
+            rename(species = sp) %>%
+            left_join(d, by = join_by(plot_id, species))
+
+
+      # summarize over years (T for fitting, F for prediction)
+      if(summarize){
+            d <- d %>%
+                  group_by(plot_id, species) %>%
+                  summarize(
+                        recruits = sum(recruits),
+                        ba = mean(ba),
+                        t = sum(t),
+                        n = sum(n),
+                        yr0 = min(yr0), yr1 = max(yr1),
+                        bacon = mean(bacon),
+                        bahet = mean(bahet),
+                        bio1 = mean(bio1),
+                        bio12 = mean(bio12),
+                        nitrogen = mean(nitrogen),
+                        sulfur = mean(sulfur)) %>%
+                  ungroup()
+      }
+
+
+      # targeted smoothing to avoid undefined recruitment rates where adult BA is zero
+      pool_ba <- function(sp){
+            s <- d %>%
+                  filter(species == sp,
+                         t != 0,
+                         !is.na(ba),
+                         !is.na(n),
+                         !is.na(bio1))
+
+            # identify orphan and adult pools
+            orphans <- s %>% filter(recruits > 0, n == 0)
+            if(nrow(orphans) == 0) return(s)
+            adults <- s %>% filter(n > 0)
+            others <- s %>% filter(recruits == 0 & n == 0)
+
+            # identify the adult plot most similar to each orphan plot
+            vars <- c("bio1", "bio12", "bahet", "nitrogen", "sulfur") # exclude bacon
+            nn <- FNN::get.knnx(adults %>% select(all_of(vars)) %>% as.matrix(),
+                                orphans %>% select(all_of(vars)) %>% as.matrix(),
+                                k = 1)$nn.index
+            adults$group <- 1:nrow(adults)
+            orphans$group <- adults$group[nn]
+            others$group <- -(1:nrow(others))
+
+            # average adult basal area within orphan-adult pairs
+            bind_rows(adults, orphans, others) %>%
+                  group_by(group) %>%
+                  mutate(ba_pooled = mean(ba),
+                         n_ba = n()) %>%
+                  ungroup()
+      }
+      d <- map_dfr(spp, pool_ba)
+
+      d <- d %>%
+            mutate(outcome = recruits/ba_pooled/t) %>%
+            filter(is.finite(outcome)) %>%
+            na.omit() %>%
+            select(plot_id, species, yr0, yr1, t, ba_pooled, n_ba, outcome,
                    bacon, bahet, sulfur, nitrogen, bio1, bio12)
+      d
 }
 
 prep_growth_data <- function(d, species){

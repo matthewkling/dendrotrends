@@ -4,12 +4,6 @@
 add_environment <- function(trees){
       select <- dplyr::select
 
-      # measurment year (not invyr) is the correct sampling date
-      # note: this should move to assemble_fia(); also modify prep_recr_data() in tandem.
-      trees <- trees %>%
-            mutate(yr = measyear) %>%
-            select(-invyr, -measyear)
-
       # operating at the subplot level
       trees <- trees %>% mutate(plot_id = subplot_id)
 

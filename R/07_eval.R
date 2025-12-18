@@ -2,6 +2,7 @@
 evaluate <- function(recr_pred, grow_pred, mort_pred){
 
       # combine results ==========
+
       add_model <- function(x, tag) lapply(x, function(y) mutate(y, model = tag))
       grow_pred <- add_model(grow_pred, "growth")
       mort_pred <- add_model(mort_pred, "mortality")
@@ -13,13 +14,14 @@ evaluate <- function(recr_pred, grow_pred, mort_pred){
 
       # baseline ==============
 
-      # HL
+      # HL deciles
       mort <- mort_pred$baseline %>%
             group_by(model, species) %>%
             mutate(bin = decile(pred)) %>%
             group_by(model, species, bin) %>%
             summarize(pred = weighted.mean(pred, t),
                       obs = weighted.mean(obs, t),
+                      weight = sum(t),
                       t = mean(t),
                       pred = multi2ann(pred, t) %>% logit(),
                       obs = multi2ann(obs, t) %>% logit(),
@@ -35,6 +37,7 @@ evaluate <- function(recr_pred, grow_pred, mort_pred){
             group_by(model, species, bin) %>%
             summarize(pred = weighted.mean(pred, n*t) %>% log10(),
                       obs = weighted.mean(obs, n*t) %>% log10(),
+                      weight = sum(t),
                       .groups = "drop")
       grow <- grow_pred$baseline %>%
             group_by(model, species) %>%
@@ -42,6 +45,7 @@ evaluate <- function(recr_pred, grow_pred, mort_pred){
             group_by(model, species, bin) %>%
             summarize(pred = weighted.mean(pred, t),
                       obs = weighted.mean(obs, t),
+                      weight = sum(t),
                       t = mean(t),
                       .groups = "drop")
       hl <- bind_rows(grow, recr, mort)
@@ -72,63 +76,70 @@ evaluate <- function(recr_pred, grow_pred, mort_pred){
                       .groups = "drop")
       spm <- bind_rows(grow, recr, mort)
 
-      p <- hl %>%
+
+      # weighted R2 (coefficient of determination)
+      wR2 <- function(x, y, w = 1){
+            tss <- sum(w * (x - mean(x))^2)
+            rss <- sum(w * (y-x)^2)
+            1 - rss / tss
+      }
+
+      R2 <- hl %>% group_by(model, species) %>%
+            summarize(value = wR2(pred, obs),
+                      weight = sum(weight),
+                      stat = "R2")
+      r <- bind_rows(mort_pred$baseline, recr_pred$baseline, grow_pred$baseline) %>%
+            group_by(model, species) %>%
+            summarize(value = cor(pred, obs),
+                      weight = sum(t),
+                      stat = "r")
+
+      spm2 <- spm %>%
+            group_by(model) %>%
+            summarize(R2 = wR2(pred, obs),
+                      r = cor(pred, obs)) %>%
+            gather(stat, value, R2, r) %>%
+            mutate(stat = factor(stat, levels = c("r", "R2"),
+                                 labels = c("Pearson's r across trees", "R-squared across deciles")))
+
+      p1 <- bind_rows(R2, r) %>%
+            mutate(stat = factor(stat, levels = c("r", "R2"),
+                                 labels = c("Pearson's r across trees", "R-squared across deciles"))) %>%
+            ggplot(aes(value)) +
+            facet_grid(model ~ stat, scales = "free") +
+            geom_histogram(boundary = 0, binwidth = .05) +
+            geom_vline(data = spm2, aes(xintercept = value), color ="red") +
+            labs(x = "r                                     R^2", y = "n species")
+      p2 <- hl %>%
             ggplot(aes(pred, obs, group = species)) +
-            facet_wrap(~model, scales = "free", ncol = 2) +
+            facet_wrap(~ model, ncol = 1, scales = "free", strip.position = "right") +
             geom_abline(slope = 1, intercept = 0, color = "dodgerblue") +
             geom_line() +
             geom_point(data = spm, color = "red", aes(size = weight)) +
-            scale_size_continuous(range = c(.5, 5)) +
+            scale_size_continuous(range = c(.2, 2)) +
             coord_flip() +
-            theme_minimal() +
             labs(x = "predicted rate (decile bins)",
                  y = "observed rate within predicted bin")
-      ggsave("figures/eval/baseline_scatter.pdf", p, width = w, height = h, units = "in")
+
+      p <- p2 + p1 + plot_layout(nrow = 1, widths = c(1, 2)) &
+            theme_minimal() &
+            theme(strip.text = element_text(color = "white"),
+                  strip.background = element_rect(fill = "black", color = "black"),
+                  panel.border = element_rect(color = "black", fill = NA),
+                  legend.position = "none")
+      ggsave(paste0("figures/eval_baseline_scat_hist.pdf"),
+             p, width = 8, height = 8, units = "in")
 
 
       # trends ===============
 
       trend <- bind_rows(grow_pred$trend,
                          recr_pred$trend,
-                         mort_pred$trend)
-
-      p <- trend %>%
-            group_by(model) %>%
-            mutate(bin = decile(drdt_pred)) %>%
-            group_by(model, bin) %>%
-            summarize(drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      tree_yrs = sum(tree_yrs),
-                      .groups = "drop") %>%
-            ggplot(aes(drdt_pred, drdt_obs)) +
-            facet_wrap(~model, scales = "free", nrow = 2) +
-            geom_vline(xintercept = 0, color = "gray") +
-            geom_hline(yintercept = 0, color = "gray") +
-            geom_abline(slope = 1, intercept = 0, color = "dodgerblue") +
-            geom_line() +
-            geom_point(aes(size = tree_yrs)) +
-            theme_minimal() +
-            coord_flip() +
-            labs(x = "predicted rate of change",
-                 y = "observed rate of change",
-                 size = "tree-years")
-      ggsave("figures/eval/trend_scatter_overall.pdf", p, width = w, height = h, units = "in")
-
-      p <- trend %>% group_by(model, species) %>% scat()
-      ggsave("figures/eval/trend_scatter_species.pdf", p, width = w, height = h, units = "in")
-
-      p <- trend %>% group_by(model, bin) %>% scat()
-      ggsave("figures/eval/trend_scatter_geog.pdf", p, width = w, height = h, units = "in")
-
-      p <- trend %>% group_by(model, species, bin) %>% scat()
-      ggsave("figures/eval/trend_scatter_spgeog.pdf", p, width = w, height = h, units = "in")
-
-      trend <- trend %>%
+                         mort_pred$trend) %>%
             mutate(model = ifelse(model == "mortality", "survival", model),
                    model = factor(model, levels = c("recruitment", "growth", "survival")),
                    drdt_pred = ifelse(model == "survival", -drdt_pred, drdt_pred),
                    drdt_obs = ifelse(model == "survival", -drdt_obs, drdt_obs))
-
       trend
 }
 
@@ -136,7 +147,14 @@ evaluate <- function(recr_pred, grow_pred, mort_pred){
 
 
 combined_scatter <- function(trend){
-      # trend <- tar_read(eval)
+
+      select <- dplyr::select
+
+      # map of grid cells
+      trend %>% select(bin) %>% distinct() %>%
+            separate(bin, c("x", "y"), sep = " ") %>%
+            ggplot(aes(x, y)) +
+            geom_tile()
 
       norm <- function(n) n / sum(n)
 
@@ -155,7 +173,7 @@ combined_scatter <- function(trend){
       pd <- trend %>%
             group_by(species, model) %>%
             bin() %>%
-            mutate(group = "species")
+            mutate(group = "species")# %>% filter(drdt_obs > -10)
       pd <- trend %>%
             group_by(bin, model) %>%
             bin() %>%
@@ -193,11 +211,13 @@ combined_scatter <- function(trend){
                   p = summary(lm(drdt_pred ~ drdt_obs,
                                  data = bind_cols(drdt_pred, drdt_obs),
                                  weights = n))$coefficients[2,4],
+                  R2 = 1 - sum((drdt_pred - drdt_obs)^2 * n) / sum((drdt_obs - mean(drdt_obs))^2 * n),
                   s = weighted.mean(sign(drdt_obs) == sign(drdt_pred), n),
-                  label = paste0("r = ", round(r, 2), "\n",
-                                 "p = ", signif(p, 2),"\n",
-                                 "CS = ", round(s*100), "%\n",
-                                 "PC = ", round(ppos*100), "%"),
+                  label = paste0(#"R2 = ", round(R2, 2), "\n",
+                        "r = ", round(r, 2), "\n",
+                        "p = ", signif(p, 2),"\n",
+                        "CS = ", round(s*100), "%\n",
+                        "PC = ", round(ppos*100), "%"),
 
                   drdt_obs = min(drdt_obs),
                   drdt_pred = max(drdt_pred)) %>%
@@ -251,183 +271,5 @@ combined_scatter <- function(trend){
                    theme(axis.title = element_blank())) +
             plot_layout(nrow = 1, guides = "collect")
 
-      ggsave("figures/eval/combined_scatters.pdf", p, width = 10, height = 7, units = "in")
+      ggsave("figures/eval_combined_scatters.pdf", p, width = 10, height = 7, units = "in")
 }
-
-# what explains variation in accuracy?
-accuracy_pred <- function(eval){
-
-      err_data <- function(x){
-            x %>%
-                  summarize(correlation = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
-                            rcorrelation = weightedCorr(drdt_pred, drdt_obs, "Spearman", weights = tree_yrs),
-                            accuracy = -sqrt(weighted.mean((drdt_pred - drdt_obs)^2, tree_yrs)),
-                            accuracy2 = accuracy / abs(weighted.mean(drdt_obs, tree_yrs)),
-                            accuracy_pct = -sqrt(weighted.mean((drdt_pred/weighted.mean(pred_2009/2+pred_2010/2, tree_yrs) -
-                                                                      drdt_obs/weighted.mean(obs_2009/2+obs_2010/2, tree_yrs))^2, tree_yrs)),
-                            slope = coef(lm(drdt_pred ~ drdt_obs))[2],
-                            n_sqrt = sqrt(sum(tree_yrs)),
-                            obs = weighted.mean(obs_2009/2 + obs_2010/2, tree_yrs),
-                            lon = weighted.mean(lon, tree_yrs),
-                            lat = weighted.mean(lat, tree_yrs)) %>%
-                  group_by(model) %>%
-                  mutate(obs = scales::rescale(obs),
-                         n_sqrt = scales::rescale(n_sqrt)) %>%
-                  gather(metric, err, correlation:slope) %>%
-                  gather(pred, value, n_sqrt:lat) %>%
-                  group_by(metric, model) %>%
-                  mutate(err = scale(err))
-      }
-
-      spp <- eval %>%
-            group_by(species, model) %>%
-            err_data()
-      com <- eval %>%
-            group_by(bin, model) %>%
-            err_data()
-      spp_com <- eval %>%
-            group_by(species, bin, model) %>%
-            err_data()
-
-      p <- spp %>%
-            ggplot(aes(value, err, color = model, fill = model)) +
-            facet_grid(metric ~ pred, scales = "free") +
-            geom_smooth(alpha = .25) +
-            theme_bw() +
-            labs(title = "species")
-      ggsave("figures/eval/accuracy_predictors_species.pdf", p, width = 7, height = 6, units = "in")
-
-      p <- com %>%
-            ggplot(aes(value, err, color = model, fill = model)) +
-            facet_grid(metric ~ pred, scales = "free") +
-            geom_smooth(alpha = .25) +
-            theme_bw() +
-            labs(title = "communities")
-      ggsave("figures/eval/accuracy_predictors_community.pdf", p, width = 7, height = 6, units = "in")
-
-      p <- spp_com %>%
-            ggplot(aes(value, err, color = model, fill = model)) +
-            facet_grid(metric ~ pred, scales = "free") +
-            geom_smooth(alpha = .25) +
-            theme_bw() +
-            labs(title = "species x communities")
-      ggsave("figures/eval/accuracy_predictors_species-community.pdf", p, width = 7, height = 6, units = "in")
-
-
-
-      # is there consistency in accuracy across the three demographic variables? (no, there's not)
-      p <- spp %>%
-            select(-pred, -value) %>%
-            distinct() %>%
-            filter(metric %in% c("accuracy_pct", "correlation")) %>%
-            group_by(metric, model) %>% mutate(err = rank(err)/length(err)) %>%
-            spread(model, err) %>% as.data.frame() %>%
-            ecoclim::pairsData(xy_vars = c("growth", "survival", "recruitment"),
-                               z_vars = c("species", "metric")) %>% as_tibble() %>%
-            ggplot(aes(x_value, y_value)) +
-            geom_point() +
-            geom_smooth() +
-            facet_grid(y_var ~ metric + x_var, scales = "free") +
-            labs(x = "rank accuracy for one demographic rate",
-                 y = "rank accuracy for another demographic rate",
-                 title = "species") +
-            theme_bw()
-      ggsave("figures/eval/accuracy_pairs_species.pdf", p, width = 9, height = 6, units = "in")
-
-      p <- com %>%
-            select(-pred, -value) %>%
-            distinct() %>%
-            filter(metric %in% c("accuracy_pct", "correlation")) %>%
-            group_by(metric, model) %>% mutate(err = rank(err)/length(err)) %>%
-            spread(model, err) %>% as.data.frame() %>%
-            ecoclim::pairsData(xy_vars = c("growth", "survival", "recruitment"),
-                               z_vars = c("species", "metric")) %>% as_tibble() %>%
-            ggplot(aes(x_value, y_value)) +
-            geom_point() +
-            geom_smooth() +
-            facet_grid(y_var ~ metric + x_var, scales = "free") +
-            labs(x = "rank accuracy for one demographic rate",
-                 y = "rank accuracy for another demographic rate",
-                 title = "communities") +
-            theme_bw()
-      ggsave("figures/eval/accuracy_pairs_community.pdf", p, width = 9, height = 6, units = "in")
-
-      p <- spp_com %>%
-            select(-pred, -value) %>%
-            distinct() %>%
-            filter(metric %in% c("accuracy_pct", "correlation")) %>%
-            group_by(metric, model) %>% mutate(err = rank(err)/length(err)) %>%
-            spread(model, err) %>% as.data.frame() %>%
-            ecoclim::pairsData(xy_vars = c("growth", "survival", "recruitment"),
-                               z_vars = c("species", "metric")) %>% as_tibble() %>%
-            ggplot(aes(x_value, y_value)) +
-            geom_point() +
-            geom_smooth() +
-            facet_grid(y_var ~ metric + x_var, scales = "free") +
-            labs(x = "rank accuracy for one demographic rate",
-                 y = "rank accuracy for another demographic rate",
-                 title = "species x community") +
-            theme_bw()
-      ggsave("figures/eval/accuracy_pairs_species-community.pdf", p, width = 9, height = 6, units = "in")
-
-}
-
-
-
-
-scat <- function(trend){
-      means <- trend %>%
-            group_by(model) %>%
-            summarize(drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      r = NA, n = NA, .groups = "drop")
-      tr <- trend %>%
-            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
-                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      n = sum(tree_yrs), .groups = "drop")
-      ggplot(tr, aes(drdt_obs, drdt_pred, weight = n, color = r)) +
-            facet_wrap(~model, scales = "free", ncol = 2) +
-            geom_vline(xintercept = 0, color = "gray") +
-            geom_hline(yintercept = 0, color = "gray") +
-            geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
-            geom_smooth(method = lm, color = "black") +
-            geom_point(aes(size = n)) +
-            geom_point(data = means, size = 5, color = "black") +
-            scale_color_gradient2(mid = "gray") +
-            theme_minimal() +
-            labs(x = "observed rate of change",
-                 y = "predicted rate of change",
-                 size = "tree-years",
-                 color = "within-group\nHL correlation")
-}
-
-scat_pct <- function(x){
-      x %>%
-            summarize(r = weightedCorr(drdt_pred, drdt_obs, "Pearson", weights = tree_yrs),
-                      pred = mean(pred_2009 + pred_2010)/2,
-                      obs = mean(obs_2009 + obs_2010)/2,
-                      drdt_pred = weighted.mean(drdt_pred, tree_yrs),
-                      drdt_obs = weighted.mean(drdt_obs, tree_yrs),
-                      drdtp_pred = drdt_pred / pred,
-                      drdtp_obs = drdt_obs / obs,
-                      n = sum(tree_yrs)) %>%
-            ggplot(aes(drdtp_obs, drdtp_pred, weight = n, color = r)) +
-            geom_vline(xintercept = 0, color = "gray") +
-            geom_hline(yintercept = 0, color = "gray") +
-            geom_abline(slope = 1, intercept = 0, color = "black", linetype = "dashed") +
-            geom_smooth(method = lm, color = "black") +
-            geom_point(aes(size = n)) +
-            annotate(geom = "point", size = 5,
-                     x = weighted.mean(fm$drdt_obs, fm$tree_yrs) / weighted.mean(fm$obs_2009/2 + fm$obs_2010/2, fm$tree_yrs),
-                     y = weighted.mean(fm$drdt_pred, fm$tree_yrs) / weighted.mean(fm$pred_2009/2 + fm$pred_2010/2, fm$tree_yrs)) +
-            scale_color_gradient2(mid = "gray") +
-            scale_x_continuous(labels = scales::percent) +
-            scale_y_continuous(labels = scales::percent) +
-            theme_minimal() +
-            labs(x = "observed rate of change",
-                 y = "predicted rate of change",
-                 size = "tree-years",
-                 color = "within-group\nHL correlation")
-}
-
