@@ -1,4 +1,3 @@
-
 get_draws <- function(x){
       x %>%
             map_dfr(function(y){
@@ -59,7 +58,7 @@ esr_data <- function(x){
 
 
 # fitted parameter values
-load_fits <- function(x, i = NULL){
+load_fits <- function(x, draws = NULL){
 
       x <- x %>%
             dplyr::select(-lp__) %>%
@@ -73,9 +72,96 @@ load_fits <- function(x, i = NULL){
                                 "6" = "temperature", "7" = "precipitation",
                                 "8" = "dbh"))
 
-      if(!is.null(i)) x <- x %>%  filter(.draw %in% sample(unique(.draw), i))
+      if(!is.null(draws)) x <- x %>% filter(.draw %in% draws)
 
       x %>% dplyr::select(i = .draw, species = sp, var, param, param_value = value)
+}
+
+# Reproducible subset of posterior draw indices. Previously this selection was
+# made with an unseeded sample(), so results shifted between runs.
+choose_draws <- function(x, ndraws = NULL, seed = 123){
+      d <- sort(unique(x$.draw))
+      if(is.null(ndraws) || ndraws >= length(d)) return(d)
+      set.seed(seed)
+      sort(sample(d, ndraws))
+}
+
+# Posterior mean parameter values across ALL draws.
+#
+# Quantities that are linear in the parameters ??? the exposure-sensitivity-response
+# decomposition, and growth predictions (identity link) ??? are computed exactly by
+# plugging in posterior means, since the mean of a linear function equals the
+# function of the mean. This is both exact and free, and removes Monte Carlo noise
+# from these results entirely.
+mean_fits <- function(x){
+      load_fits(x) %>%
+            group_by(species, var, param) %>%
+            summarize(param_value = mean(param_value), .groups = "drop") %>%
+            mutate(i = 1L)
+}
+
+# Compute the linear predictor for a batch of posterior draws, using data.table.
+#
+# This is the performance-critical step: for each draw, each tree-year's
+# environmental values are multiplied by that species' coefficients and summed.
+# The dplyr equivalent (many-to-many join, then grouped summarize over millions of
+# groups) is both slow and memory-hungry, because grouped aggregation at this
+# scale is dominated by the grouping machinery rather than the arithmetic.
+#
+#   ode  : long-format environmental data (one row per group x var)
+#   fits : long-format coefficients (one row per draw x species x var [x param])
+#   keys : grouping columns identifying a prediction unit
+#   d    : draw ids in this batch
+#
+# Returns one row per draw x key (x param), with the summed linear predictor.
+linpred_batch <- function(ode, fits, keys, d, by_param = FALSE){
+
+      # `i` is data.table's own name for the row-subset argument, so the draw-index
+      # column is renamed internally to avoid collisions in both the subset and the
+      # `by=` grouping, then restored on the way out.
+      fits <- fits[fits$i %in% d, , drop = FALSE]
+      names(fits)[names(fits) == "i"] <- "draw_id"
+
+      O <- data.table::as.data.table(ode)
+      F <- data.table::as.data.table(fits)
+
+      data.table::setkeyv(O, c("species", "var"))
+      data.table::setkeyv(F, c("species", "var"))
+
+      grp <- c("draw_id", keys, if(by_param) "param")
+
+      # Join first, then aggregate. Doing both in one X[Y, j, by=] expression is
+      # faster still, but the `i.` prefixing of the join argument's columns in the
+      # j/by scope is easy to get wrong and fails silently; keeping them separate
+      # means every column has a plain name at aggregation time. data.table's
+      # grouped aggregation is the part that matters for speed here.
+      J <- merge(O, F, by = c("species", "var"), allow.cartesian = TRUE)
+      out <- J[, .(pred = sum(param_value * value)), by = grp]
+      rm(J)
+
+      data.table::setnames(out, "draw_id", "i")
+      tibble::as_tibble(out)
+}
+
+
+# Average a per-draw computation over posterior draws in batches.
+#
+# Needed for mortality and recruitment, where a nonlinear link is applied before
+# differencing, so posterior means are not exact. Draws are collapsed to one row
+# per group within each batch, so peak memory scales with `batch` rather than
+# `ndraws` and the accumulated result stays small.
+batch_average <- function(draw_ids, batch, keys, fun){
+      acc <- NULL
+      for(d in split(draw_ids, ceiling(seq_along(draw_ids) / batch))){
+            b <- data.table::as.data.table(fun(d))
+            b <- b[, .(psum = sum(pred), nd = .N), by = keys]
+            acc <- if(is.null(acc)) b else
+                  rbind(acc, b)[, .(psum = sum(psum), nd = sum(nd)), by = keys]
+            rm(b); gc(verbose = FALSE)
+      }
+      acc[, pred := psum / nd]
+      acc[, psum := NULL][, nd := NULL]
+      tibble::as_tibble(acc)
 }
 
 # observed data
@@ -139,11 +225,14 @@ expand_env_obs <- function(od, e){
             dplyr::select(-nrows)
 }
 
-predict_growth <- function(grow_draws, grow_data, trends, ndraws = 5){
+predict_growth <- function(grow_draws, grow_data, trends){
 
       select <- dplyr::select
       grow_draws <- valid_draws(grow_draws)
-      fi <- load_fits(grow_draws, ndraws)
+
+      # Growth uses an identity link and all downstream quantities are linear in
+      # the parameters, so posterior means give exactly the draw-averaged result.
+      fi <- mean_fits(grow_draws)
       od <- load_obs(grow_data)
 
 
@@ -166,7 +255,8 @@ predict_growth <- function(grow_draws, grow_data, trends, ndraws = 5){
       fe <- fe %>%
             group_by(i, species, plot_id, tree_id, year, t) %>%
             summarize(pred = sum(param_value * value),
-                      .groups = "drop")
+                      .groups = "drop") %>%
+            select(-i)
 
       # observed trends for 2009 to 2010
       mt <- od %>%
@@ -219,36 +309,53 @@ predict_growth <- function(grow_draws, grow_data, trends, ndraws = 5){
            trend = fm)
 }
 
-predict_mortality <- function(mort_draws, mort_data, trends, ndraws = 5){
+predict_mortality <- function(mort_draws, mort_data, trends, ndraws = 50, batch = 5, seed = 123){
 
       select <- dplyr::select
       mort_draws <- valid_draws(mort_draws)
-      fi <- load_fits(mort_draws, ndraws)
+      fi_all <- load_fits(mort_draws)
+      dr <- choose_draws(mort_draws, ndraws, seed)
       od <- load_obs(mort_data)
+
+      keys <- c("species", "plot_id", "tree_id", "year", "t")
 
 
       ### baseline ================================================
 
-      # combine with fitted parameters and calculate predicted mortality
-      fdp <- baseline_pred(fi, od) %>%
-            mutate(pred = ann2multi(inv_logit(pred), t)) # convert from annual logit to multiyear probability
+      # combine with fitted parameters and calculate predicted mortality.
+      # inv_logit is nonlinear, so this is averaged over draws rather than
+      # evaluated at the posterior mean.
+      obs_lookup <- baseline_pred(filter(fi_all, i == dr[1]), od) %>%
+            select(all_of(keys), obs)
+      fdp <- batch_average(dr, batch, keys, function(d){
+            baseline_pred(filter(fi_all, i %in% d), od) %>%
+                  mutate(pred = ann2multi(inv_logit(pred), t)) # annual logit to multiyear probability
+      }) %>%
+            left_join(obs_lookup, by = keys)
 
 
       ### trends ================================
 
       # join FIA data, env trends, and fitted params
       ode <- expand_env_obs(od, trends)
-      fe <- left_join(fi, ode, relationship = "many-to-many", by = join_by(species, var))
 
-      # exposure-sensitivity-response data
-      esr <- esr_data(fe)
+      # exposure-sensitivity-response data. These are linear in the parameters,
+      # so posterior means give the exact draw-averaged values.
+      esr <- left_join(mean_fits(mort_draws), ode,
+                       relationship = "many-to-many", by = join_by(species, var)) %>%
+            esr_data()
+
+      # Carry only the columns the prediction needs into the batched join. lon/lat
+      # are used by esr_data() above but not here, and `param` is constant for this
+      # model; at tens of millions of rows per draw each dropped column matters.
+      ode_lean <- ode %>% select(species, plot_id, tree_id, var, value, year, t)
+      fi_lean <- fi_all %>% select(i, species, var, param_value)
 
       # combine with fitted parameters and calculate predicted mortality
-      fe <- fe %>%
-            group_by(i, species, plot_id, tree_id, year, t) %>%
-            summarize(pred = sum(param_value * value),
-                      .groups = "drop") %>%
-            mutate(pred = inv_logit(pred))
+      fe <- batch_average(dr, batch, keys, function(d){
+            linpred_batch(ode_lean, fi_lean, keys, d) %>%
+                  mutate(pred = inv_logit(pred))
+      })
 
       # observed trends for 2009 to 2010
       mt <- od %>%
@@ -286,11 +393,13 @@ predict_mortality <- function(mort_draws, mort_data, trends, ndraws = 5){
 
 }
 
-predict_recruitment <- function(recr_draws, recr_data, trends, recr_ts, ndraws = 5){
+predict_recruitment <- function(recr_draws, recr_data, trends, recr_ts,
+                                ndraws = 50, batch = 5, seed = 123){
 
       select <- dplyr::select
       recr_draws <- valid_draws(recr_draws)
-      fi <- load_fits(recr_draws, ndraws)
+      fi_all <- load_fits(recr_draws)
+      dr <- choose_draws(recr_draws, ndraws, seed)
 
       # observed data
       load_obs_rec <- function(x){
@@ -312,25 +421,28 @@ predict_recruitment <- function(recr_draws, recr_data, trends, recr_ts, ndraws =
 
       ### baseline ================================================
 
-      # combine with fitted parameters and calculate predicted
-      fdp0 <- baseline_pred_rec(fi, od) %>%
+      # Observed rates are draw-independent, so compute once.
+      base_keys <- c("species", "plot_id", "year", "t")
+      obs_rec <- baseline_pred_rec(filter(fi_all, i == dr[1]), od) %>%
             gather(stat, value, obs, pred) %>%
             unite(stat, param, stat) %>%
-            spread(stat, value)
+            spread(stat, value) %>%
+            mutate(prob_obs = as.integer(zeta_obs > 0),
+                   obs = prob_obs * zeta_obs) %>%
+            select(all_of(base_keys), obs)
 
-      fdp0 <- fdp0 %>%
-            mutate(
-                  prob_obs = as.integer(zeta_obs > 0),
-                  prob_pred = ann2multi(inv_logit(zeta_pred), t),
-                  mean_obs = zeta_obs,
-                  mean_pred = exp(mu_pred),
-                  rate_obs = prob_obs * mean_obs, # same as rate_obs = zeta_obs
-                  rate_pred = prob_pred * mean_pred) %>%
+      # Predicted rates combine zeta and mu nonlinearly, so average over draws.
+      fdp <- batch_average(dr, batch, base_keys, function(d){
+            baseline_pred_rec(filter(fi_all, i %in% d), od) %>%
+                  gather(stat, value, obs, pred) %>%
+                  unite(stat, param, stat) %>%
+                  spread(stat, value) %>%
+                  mutate(pred = ann2multi(inv_logit(zeta_pred), t) * exp(mu_pred)) %>%
+                  select(i, all_of(base_keys), pred) %>%
+                  na.omit()
+      }) %>%
+            left_join(obs_rec, by = base_keys) %>%
             na.omit()
-
-      fdp <- fdp0 %>%
-            mutate(pred = rate_pred,
-                   obs = rate_obs)
 
 
       ### trends ================================
@@ -345,16 +457,29 @@ predict_recruitment <- function(recr_draws, recr_data, trends, recr_ts, ndraws =
             group_by(species, plot_id) %>%
             mutate(t = unique(na.omit(t))) %>% # make sure t is present for all params
             ungroup()
-      fe <- left_join(fi, ode, relationship = "many-to-many", by = join_by(species, var))
 
-      # exposure-sensitivity-response data
-      esr <- esr_data(fe)
+      # exposure-sensitivity-response data. These are linear in the parameters,
+      # so posterior means give the exact draw-averaged values.
+      esr <- left_join(mean_fits(recr_draws), ode,
+                       relationship = "many-to-many", by = join_by(species, var)) %>%
+            esr_data()
 
-      # calculate predicted recruitment rate
-      fe <- fe %>%
-            group_by(i, species, plot_id, param, year, t) %>%
-            summarize(pred = sum(param_value * value),
-                      .groups = "drop")
+      # Carry only the columns the prediction needs into the batched join.
+      # tree_id is a constant placeholder for recruitment; lon/lat are used by
+      # esr_data() above but not here.
+      ode_lean <- ode %>% select(species, plot_id, var, value, year, t)
+      fi_lean <- fi_all %>% select(i, species, var, param, param_value)
+
+      # calculate predicted recruitment rate. The zeta/mu combination below is
+      # nonlinear, so this is averaged over draws in batches rather than
+      # evaluated at the posterior mean.
+      rec_keys <- c("species", "plot_id", "year", "t")
+      fe <- batch_average(dr, batch, rec_keys, function(d){
+            linpred_batch(ode_lean, fi_lean, rec_keys, d, by_param = TRUE) %>%
+                  spread(param, pred) %>%
+                  mutate(pred = ann2multi(inv_logit(zeta), t) * exp(mu)) %>%
+                  select(-mu, -zeta)
+      })
 
       # observed trends for 2009 to 2010
       mt <- odt %>%
@@ -370,9 +495,6 @@ predict_recruitment <- function(recr_draws, recr_data, trends, recr_ts, ndraws =
       dt <- 1
 
       fm <- fe %>%
-            spread(param, pred) %>%
-            mutate(pred = ann2multi(inv_logit(zeta), t) * exp(mu)) %>%
-            select(-mu, -zeta) %>%
             left_join(mt, by = join_by(species, plot_id, year)) %>%
             filter(is.finite(year)) %>%
             gather(stat, value, pred, obs) %>%

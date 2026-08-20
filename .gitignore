@@ -33,10 +33,11 @@ docs/
 po/*~
 # RStudio Connect folder
 rsconnect/
-.DS_Store
+*.DS_Store
 dendrotrends.Rproj
 notes
 _targets/
 code
 data
 manuscript
+*._*

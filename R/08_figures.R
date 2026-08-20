@@ -1,4 +1,3 @@
-
 compile_esr <- function(recr_pred, grow_pred, mort_pred){
       f <- bind_rows(recr_pred$esr %>% mutate(model = "recruitment",
                                               tree_id = NA_character_),
@@ -212,7 +211,7 @@ sensitivity_plots <- function(f, species, recr_draws, grow_draws, mort_draws, os
 
       select <- dplyr::select
 
-            s <- bind_rows(load_fits(get_draws(grow_draws)) %>% mutate(model = "growth"),
+      s <- bind_rows(load_fits(get_draws(grow_draws)) %>% mutate(model = "growth"),
                      load_fits(get_draws(mort_draws)) %>% mutate(model = "mortality"),
                      load_fits(get_draws(recr_draws)) %>% mutate(model = "recruitment"))
 
@@ -467,11 +466,21 @@ response_plots <- function(f, e){
 }
 
 
-importance_plots <- function(f, species, oscl){
+importance_plots <- function(f, species, oscl,
+                             clim_labels = c("temperature", "precipitation"),
+                             suffix = "",
+                             vp_seed = 123){
 
       select <- dplyr::select
       scl <- format_scl(species$scl)
       gscl <- format_scl(species$gscl)
+
+      # The two climate slots are named "temperature" / "precipitation" internally throughout the pipeline
+      relabel_clim <- function(x){
+            levels(x$var)[levels(x$var) == "temperature"] <- clim_labels[1]
+            levels(x$var)[levels(x$var) == "precipitation"] <- clim_labels[2]
+            x
+      }
 
 
       # global scaling
@@ -559,11 +568,15 @@ importance_plots <- function(f, species, oscl){
             rename(response = value) %>%
             select(-var)
 
+      # seed fixed so repeated runs reproduce the same subsample; without this the
+      # partitioning shifts by a few percentage points between runs
+      set.seed(vp_seed)
       vp <- unique(z$model) %>%
             map(function(m){
-                  zz <- z %>% filter(model == m) %>% sample_n(50000)
+                  zz <- z %>% filter(model == m)
+                  zz <- slice_sample(zz, n = min(50000, nrow(zz)))
                   vp <- rdacca.hp::rdacca.hp(zz$response,
-                                             select(zz, exposure_bacon:sensitivity_precipitation))
+                                             select(zz, all_of(vars)))
                   vp$Hier.part %>%
                         as.data.frame() %>%
                         mutate(total_explained = vp$Total_explained_variation,
@@ -595,6 +608,7 @@ importance_plots <- function(f, species, oscl){
                                            "conspec. BA", "heterospec. BA", "sulfur", "nitrogen",
                                            "unexplained")),
                    group = factor(group, levels = (c("climate", "forest density", "pollution", "")))) %>%
+            relabel_clim() %>%
             arrange(model, var, stat) %>%
             mutate(pcum = cumsum(percent)) %>%
             ggplot(aes(x = var, y = (pcum - percent/2)/100,
@@ -614,7 +628,7 @@ importance_plots <- function(f, species, oscl){
                   legend.position = "none") +
             labs(y = "cumulative portion of modeled response variation explained",
                  fill = NULL)
-      ggsave("figures/importance_vp_cumulative.pdf",
+      ggsave(paste0("figures/importance_vp_cumulative", suffix, ".pdf"),
              p, width = 8, height = 8, units = "in")
 
 
@@ -625,9 +639,9 @@ importance_plots <- function(f, species, oscl){
             arrange(model) %>%
             group_by(model) %>%
             mutate(var = factor(var,
-                               levels = c("temperature", "precipitation", "bacon", "bahet", "nitrogen", "sulfur", "unexplained"),
-                               labels = c("temperature", "precipitation", "conspec. BA", "heterospec. BA", "nitrogen", "sulfur", "unexplained")),
-                  group = factor(group, levels = (c("climate", "pollution", "forest density", "")))) %>%
+                                levels = c("temperature", "precipitation", "bacon", "bahet", "nitrogen", "sulfur", "unexplained"),
+                                labels = c("temperature", "precipitation", "conspec. BA", "heterospec. BA", "nitrogen", "sulfur", "unexplained")),
+                   group = factor(group, levels = (c("climate", "pollution", "forest density", "")))) %>%
             select(model, stat, group, var, value = percent) %>%
             group_by(model) %>%
             mutate(value = value / sum(value),
@@ -637,7 +651,8 @@ importance_plots <- function(f, species, oscl){
                                   levels = c("recruitment\nprobability", "recruitment\nrate", "growth", "mortality"),
                                   labels = c("recruitment\nprobability", "recruitment\nrate", "growth", "survival"))) %>%
             mutate(label = str_sub(round(value*100), 1, 2),
-                   label_color = ifelse(value < .005, "white", "black"))
+                   label_color = ifelse(value < .005, "white", "black")) %>%
+            relabel_clim()
 
       i <- imp %>%
             ungroup() %>%
@@ -653,11 +668,13 @@ importance_plots <- function(f, species, oscl){
             mutate(model = factor(model,
                                   levels = c("recr. prob.", "recr. rate", "growth", "survival"))) %>%
             mutate(label = ifelse(value == 1, "1.0", str_sub(round(value, 2), 2, 4)),
-                   label_color = ifelse(value < .05, "white", "black"))
+                   label_color = ifelse(value < .05, "white", "black")) %>%
+            mutate(var = factor(var)) %>%
+            relabel_clim()
 
 
       pi <- ggplot(i,
-             aes(model, var, fill = value)) +
+                   aes(model, var, fill = value)) +
             facet_grid(group~stat, scales = "free") +
             geom_tile(color = "white") +
             geom_text(aes(label = label, color = label_color)) +
@@ -708,8 +725,6 @@ importance_plots <- function(f, species, oscl){
                                           barwidth = 10, barheight = .5))
 
       p <- pi + pv + plot_layout(nrow = 1, widths = c(12, 8))
-      ggsave("figures/importance_combo.pdf",
+      ggsave(paste0("figures/importance_combo", suffix, ".pdf"),
              p, width = 10, height = 5, units = "in")
 }
-
-

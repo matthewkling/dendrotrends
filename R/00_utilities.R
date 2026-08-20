@@ -1,5 +1,3 @@
-
-
 logit <- function(x) log(x / (1-x))
 
 inv_logit <- function(x) 1 / (1 + exp(-x))
@@ -34,3 +32,15 @@ prj_logit <- function(x, y, x2, offset= 1/10000){
 ann2multi <- function(x, t) 1 - (1 - x) ^ t
 
 multi2ann <- function(x, t) 1 - ((1 - x) ^ (1/t))
+
+
+# Format a proportion as a percentage without rounding away the distinction
+# between "all" and "nearly all". round() would display 0.996 as "100%", which
+# misrepresents a group containing negative values; likewise 0.004 as "0%".
+pct_label <- function(x, digits = 0){
+      p <- x * 100
+      out <- paste0(round(p, digits), "%")
+      out[p < 100 & round(p, digits) >= 100] <- paste0(">", 100 - 10^(-digits), "%")
+      out[p > 0   & round(p, digits) <= 0]   <- paste0("<", 10^(-digits), "%")
+      out
+}

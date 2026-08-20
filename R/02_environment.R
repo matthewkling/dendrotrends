@@ -1,7 +1,9 @@
-
 # add environmental variables (forest density, climate, pollution) to FIA records
 
-add_environment <- function(trees){
+add_environment <- function(trees,
+                            clim = "baseline",
+                            clim_dir = "/Volumes/ultramarine/CHELSA/v2/derived/annual/",
+                            clim_years = 2000:2018){
       select <- dplyr::select
 
       # operating at the subplot level
@@ -196,40 +198,62 @@ add_environment <- function(trees){
 
 
       ### climate =======================
-
       ll <- trees %>%
             filter(plot_id %in% unique(d$plot_id)) %>%
             dplyr::select(plot_id, lon, lat) %>%
             distinct()
 
-      # trends
-      pr_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_pr_") %>%
-            rast() %>%
-            setNames(paste0("y", 1:nlyr(.))) %>%
-            extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
-            "/"(100) %>% log() %>%
-            apply(1, function(x) c(project(2000:2018, x, 2009),
-                                   project(2000:2018, x, 2010))) %>%
-            t() %>%
-            as.data.frame() %>%
-            setNames(c("bio12_2009", "bio12_2010")) %>%
-            as_tibble() %>%
-            mutate(plot_id = ll$plot_id) %>%
-            distinct()
-      tas_ann <- list.files("/Volumes/T7/CHELSA/v2/derived/annual/", full.names = T, pattern = "_tas_") %>%
-            rast() %>%
-            setNames(paste0("y", 1:nlyr(.))) %>%
-            extract(ll %>% select(lon, lat) %>% as.matrix()) %>%
-            "*"(0.1) %>% "+"(-273.15) %>%
-            apply(1, function(x) c(project(2000:2018, x, 2009),
-                                   project(2000:2018, x, 2010))) %>%
-            t() %>%
-            as.data.frame() %>%
-            setNames(c("bio1_2009", "bio1_2010")) %>%
-            as_tibble() %>%
-            mutate(plot_id = ll$plot_id) %>%
-            distinct()
-      clim_trends <- left_join(pr_ann, tas_ann)
+      # Climate parameterization specs.
+      #
+      # `bio1` and `bio12` are internal slot names for the two climate predictors;
+      # which variables actually occupy them depends on `clim`. Keeping the names
+      # fixed means every downstream stage (species scaling, model data prep, kNN
+      # smoothing, Stan fitting, prediction) works unchanged across
+      # parameterizations.
+      clim_spec <- switch(
+            clim,
+            baseline = list(
+                  list(pattern = "_pr_",  name = "bio12",
+                       fun = function(x) log(x / 100)),
+                  list(pattern = "_tas_", name = "bio1",
+                       fun = function(x) x * 0.1 - 273.15)
+            ),
+            alt = list(
+                  # min CMI: P - PET, kg m-2
+                  list(pattern = "_cmimin_", name = "bio12", fun = identity),
+                  # max VPD
+                  list(pattern = "_vpdmax_", name = "bio1", fun = identity)
+            ),
+            stop("unrecognized `clim` value: ", clim)
+      )
+
+      # extract one climate variable at plot locations and project to 2009 / 2010
+      extract_clim <- function(spec){
+            f <- list.files(clim_dir, full.names = TRUE, pattern = spec$pattern)
+            if(length(f) != length(clim_years))
+                  stop("found ", length(f), " rasters matching '", spec$pattern,
+                       "' but clim_years has length ", length(clim_years))
+
+            v <- f %>%
+                  rast() %>%
+                  setNames(paste0("y", seq_along(f))) %>%
+                  extract(ll %>% select(lon, lat) %>% as.matrix())
+            v <- spec$fun(v)
+
+            v %>%
+                  apply(1, function(x) c(project(clim_years, x, 2009),
+                                         project(clim_years, x, 2010))) %>%
+                  t() %>%
+                  as.data.frame() %>%
+                  setNames(paste0(spec$name, c("_2009", "_2010"))) %>%
+                  as_tibble() %>%
+                  mutate(plot_id = ll$plot_id) %>%
+                  distinct()
+      }
+
+      clim_trends <- clim_spec %>%
+            map(extract_clim) %>%
+            reduce(left_join, by = "plot_id")
 
       # means
       clim_means <- clim_trends %>%
@@ -311,4 +335,3 @@ add_environment <- function(trees){
       list(annual = d,
            trend = e)
 }
-

@@ -1,4 +1,3 @@
-
 evaluate <- function(recr_pred, grow_pred, mort_pred){
 
       # combine results ==========
@@ -216,8 +215,8 @@ combined_scatter <- function(trend){
                   label = paste0(#"R2 = ", round(R2, 2), "\n",
                         "r = ", round(r, 2), "\n",
                         "p = ", signif(p, 2),"\n",
-                        "CS = ", round(s*100), "%\n",
-                        "PC = ", round(ppos*100), "%"),
+                        "CS = ", pct_label(s), "\n",
+                        "PC = ", pct_label(ppos)),
 
                   drdt_obs = min(drdt_obs),
                   drdt_pred = max(drdt_pred)) %>%
@@ -260,6 +259,9 @@ combined_scatter <- function(trend){
       }
 
       p <- (plt("recruitment") +
+                  coord_transform(x = scales::pseudo_log_trans(sigma = 0.1),
+                                  y = scales::pseudo_log_trans(sigma = 0.1)) +
+                  scale_x_continuous(breaks = c(-10, -1, 0)) +
                   theme(strip.background.y = element_blank(),
                         axis.title.x = element_blank())) +
             (plt("growth") +
