@@ -1,4 +1,6 @@
-# Source code for Kling et al. (2026) GCB
+# Source code for Kling et al. (2026) GCB 
+
+[![DOI](https://zenodo.org/badge/878498937.svg)](https://doi.org/10.5281/zenodo.22774453)
 
 This repository contains analysis code (R and Stan) and results for the following journal article:
 
